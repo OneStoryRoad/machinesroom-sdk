@@ -1,0 +1,62 @@
+{
+  "name": "@machinesroom/api-client",
+  "version": "0.1.2",
+  "description": "MachinesRoom public API client and Node-first Agent SDK.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "homepage": "https://machinesroom.com/bots",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OneStoryRoad/machinesroom-sdk.git",
+    "directory": "packages/api-client"
+  },
+  "bugs": {
+    "url": "https://github.com/OneStoryRoad/machinesroom-sdk/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent.d.ts",
+      "import": "./dist/agent.js"
+    },
+    "./package.json": {
+      "default": "./package.json"
+    }
+  },
+  "scripts": {
+    "prebuild": "pnpm --filter @machinesroom/contracts build",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "pnpm run typecheck",
+    "pretest": "pnpm --filter @machinesroom/contracts build",
+    "test": "tsx --test tests/index.test.ts",
+    "prepack": "pnpm run build",
+    "pack:dry-run": "pnpm pack --dry-run"
+  },
+  "dependencies": {
+    "@machinesroom/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.0",
+    "tsx": "4.21.0",
+    "typescript": "5.7.3"
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "name": "@machinesroom/contracts",
+  "version": "0.1.2",
+  "description": "MachinesRoom public schemas, API contracts, and reward proof helpers.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "homepage": "https://machinesroom.com/openapi.json",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OneStoryRoad/machinesroom-sdk.git",
+    "directory": "packages/contracts"
+  },
+  "bugs": {
+    "url": "https://github.com/OneStoryRoad/machinesroom-sdk/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": {
+      "default": "./package.json"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && pnpm run compile:solidity",
+    "compile:solidity": "node scripts/compile-reward-merkle-distributor.mjs",
+    "deploy:reward-merkle": "tsx scripts/deploy-reward-merkle-distributor.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "pnpm run typecheck",
+    "test": "tsx --test tests/*.test.ts",
+    "prepack": "pnpm run build",
+    "pack:dry-run": "pnpm pack --dry-run"
+  },
+  "dependencies": {
+    "zod": "3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.0",
+    "solc": "0.8.24",
+    "tsx": "4.21.0",
+    "typescript": "5.7.3",
+    "viem": "2.46.3"
+  }
+}

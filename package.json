@@ -1,0 +1,36 @@
+{
+  "name": "machinesroom-sdk-release",
+  "private": true,
+  "version": "0.1.2",
+  "description": "Public release workspace for the MachinesRoom SDK packages.",
+  "packageManager": "pnpm@10.33.4",
+  "scripts": {
+    "build": "pnpm --filter @machinesroom/contracts build && pnpm --filter @machinesroom/api-client build",
+    "ci:install": "pnpm install --frozen-lockfile --ignore-scripts",
+    "check:sdk-package": "pnpm --filter @machinesroom/contracts build && pnpm --filter @machinesroom/api-client build && node scripts/check-sdk-package-boundary.mjs && pnpm --filter @machinesroom/contracts pack --dry-run && pnpm --filter @machinesroom/api-client pack --dry-run",
+    "test": "pnpm --filter @machinesroom/contracts test && pnpm --filter @machinesroom/api-client test"
+  },
+  "pnpm": {
+    "overrides": {
+      "brace-expansion@1.1.12": "1.1.13",
+      "brace-expansion@2.0.2": "2.0.3",
+      "fast-uri": "3.1.2",
+      "flatted": "3.4.2",
+      "picomatch@2.3.1": "2.3.2",
+      "picomatch@4.0.3": "4.0.4",
+      "postcss": "8.5.13",
+      "qs": "6.15.0",
+      "rollup": "4.60.2",
+      "schema-utils@4.3.3>ajv": "8.18.0",
+      "serialize-javascript": "7.0.5",
+      "solc>tmp": "0.2.5",
+      "undici": "7.24.7",
+      "uuid": "14.0.0",
+      "ws": "8.20.1",
+      "yaml": "2.8.3"
+    }
+  },
+  "devDependencies": {
+    "typescript": "5.7.3"
+  }
+}
