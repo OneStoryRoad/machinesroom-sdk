@@ -316,6 +316,27 @@ test("@machinesroom/api-client/agent validates AgentKit nonce, URI, and domain p
     }),
     ["agentkit nonce must match x-agent-nonce"]
   );
+  assert.deepEqual(
+    validateAgentKitContext({
+      agentkitHeader: header,
+      apiBaseUrl: "https://api.example.com",
+      path: "/v1/candidates",
+      nonce: "nonce-agentkit-test"
+    }),
+    ["agentkit uri must be https://api.example.com/v1/candidates"]
+  );
+  assert.deepEqual(
+    validateAgentKitContext({
+      agentkitHeader: header,
+      apiBaseUrl: "https://api-alt.example.com",
+      path: "/v1/agents/verify",
+      nonce: "nonce-agentkit-test"
+    }),
+    [
+      "agentkit uri must be https://api-alt.example.com/v1/agents/verify",
+      "agentkit domain must be api-alt.example.com"
+    ]
+  );
 
   const urlAlphabetHeader = Buffer.from(
     JSON.stringify({
@@ -430,6 +451,143 @@ test("@machinesroom/api-client/agent sends high-level signed V1 writes with idem
     ),
     true
   );
+});
+
+test("@machinesroom/api-client/agent submits verified direct corrections with AgentKit nonce and idempotency", async () => {
+  const identity = generateMachineRoomAgentIdentity();
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const agentkit = Buffer.from(
+    JSON.stringify({
+      nonce: "nonce-correction-agentkit",
+      uri: "https://api.example.com/v1/stories/story-1/corrections",
+      domain: "api.example.com"
+    }),
+    "utf8"
+  ).toString("base64");
+  const client = createMachineRoomAgentClient({
+    apiBaseUrl: "https://api.example.com",
+    identity: { botId: identity.botId, privateKey: identity.privateKey },
+    fetch: (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(
+        JSON.stringify({
+          accepted: true,
+          storyId: "story-1",
+          packetHash: "b".repeat(64),
+          revisionHash: "d".repeat(64)
+        }),
+        {
+          status: 202,
+          headers: { "content-type": "application/json" }
+        }
+      );
+    }) as unknown as typeof fetch
+  });
+
+  await client.submitCorrection(
+    "story-1",
+    {
+      expectedCurrentPacketHash: "a".repeat(64),
+      expectedCurrentRevisionHash: "c".repeat(64),
+      article: {
+        schemaVersion: 1,
+        blocks: [{ type: "paragraph", text: [{ text: "Corrected article body." }] }]
+      },
+      correctionReason: "Corrected detail",
+      materiality: "FACTUAL"
+    },
+    {
+      agentkit,
+      idempotencyKey: "agent-correction:1",
+      timestamp: "1778580000000",
+      requestId: "req-agent-correction"
+    }
+  );
+
+  assert.equal(calls[0]?.url, "https://api.example.com/v1/stories/story-1/corrections");
+  assert.equal(calls[0]?.init.method, "POST");
+  const headers = calls[0]?.init.headers as Record<string, string>;
+  assert.equal(headers.agentkit, agentkit);
+  assert.equal(headers["Idempotency-Key"], "agent-correction:1");
+  assert.equal(headers["x-request-id"], "req-agent-correction");
+  assert.equal(headers["x-agent-timestamp"], "1778580000000");
+  assert.equal(headers["x-agent-nonce"], "nonce-correction-agentkit");
+  assert.equal(headers["content-type"], "application/json");
+  const body = JSON.parse(calls[0]?.init.body as string) as Record<string, unknown>;
+  assert.equal(body.botId, identity.botId);
+  assert.equal(body.verified, true);
+  assert.equal(body.correctionReason, "Corrected detail");
+  const canonicalBody = stableStringifyAgentJson(body);
+  const signedMessage = `tmr-agent-v1:tmr.1778580000000.nonce-correction-agentkit.POST./v1/stories/story-1/corrections.${canonicalBody}`;
+  assert.equal(
+    crypto.verify(
+      null,
+      Buffer.from(signedMessage, "utf8"),
+      crypto.createPublicKey(identity.privateKey),
+      Buffer.from(headers["x-agent-signature"], "base64url")
+    ),
+    true
+  );
+});
+
+test("@machinesroom/api-client/agent surfaces actionable direct correction errors", async () => {
+  const identity = generateMachineRoomAgentIdentity();
+  const agentkit = Buffer.from(
+    JSON.stringify({
+      nonce: "nonce-correction-error",
+      uri: "https://api.example.com/v1/stories/story-1/corrections",
+      domain: "api.example.com"
+    }),
+    "utf8"
+  ).toString("base64");
+  const client = createMachineRoomAgentClient({
+    apiBaseUrl: "https://api.example.com",
+    identity: { botId: identity.botId, privateKey: identity.privateKey },
+    fetch: (async () =>
+      new Response(
+        JSON.stringify({
+          error: "Current packet hash mismatch",
+          code: "CURRENT_PACKET_MISMATCH",
+          message: "Current packet hash mismatch.",
+          details: { currentPacketHash: "b".repeat(64) },
+          nextAction: "Fetch the current machine-room packet hash, rebuild the write against that hash, and retry.",
+          requestId: "req-agent-correction-error",
+          docs: { skill: "/agents/skill.md" }
+        }),
+        {
+          status: 409,
+          headers: { "content-type": "application/json" }
+        }
+      )) as unknown as typeof fetch
+  });
+
+  try {
+    await client.submitCorrection(
+      "story-1",
+      {
+        verified: true,
+        expectedCurrentPacketHash: "a".repeat(64),
+        article: {
+          schemaVersion: 1,
+          blocks: [{ type: "paragraph", text: [{ text: "Corrected article body." }] }]
+        },
+        correctionReason: "Corrected detail"
+      },
+      {
+        agentkit,
+        idempotencyKey: "agent-correction-error:1",
+        timestamp: "1778580000000"
+      }
+    );
+    assert.fail("expected submitCorrection to throw");
+  } catch (error) {
+    assert.ok(error instanceof MachineRoomAgentSdkError);
+    assert.equal(error.status, 409);
+    assert.equal(error.code, "CURRENT_PACKET_MISMATCH");
+    assert.deepEqual(error.details, { currentPacketHash: "b".repeat(64) });
+    assert.equal(error.nextAction, "Fetch the current machine-room packet hash, rebuild the write against that hash, and retry.");
+    assert.equal(error.requestId, "req-agent-correction-error");
+  }
 });
 
 test("@machinesroom/api-client/agent surfaces actionable V1 errors", async () => {
