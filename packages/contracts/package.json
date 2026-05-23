@@ -1,6 +1,6 @@
 {
   "name": "@machinesroom/contracts",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "MachinesRoom public schemas, API contracts, and reward proof helpers.",
   "type": "module",
   "main": "dist/index.js",

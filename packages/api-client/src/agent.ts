@@ -233,22 +233,16 @@ export interface AgentIdempotentWriteOptions extends AgentWriteOptions {
   idempotencyKey: string;
 }
 
-export interface AgentVerifiedIdempotentWriteOptions extends AgentIdempotentWriteOptions {
-  agentkit: string;
-}
-
 export type MachineRoomAgentConsensusRole = "WRITER" | "FACT_CHECK" | "RISK" | "SOURCE_DIVERSITY";
 export type MachineRoomAgentRevisionVoteRole = MachineRoomAgentConsensusRole | "EDITOR" | "LEGAL" | "ADMIN";
 export type MachineRoomArticleType = "brief" | "news" | "analysis" | "explainer" | "interview" | "opinion" | "live" | "research";
-export type MachineRoomAgentCorrectionMateriality =
+export type MachineRoomRevisionMateriality =
   | "TYPO"
   | "COPYEDIT"
   | "FACTUAL"
   | "SOURCE"
   | "LEGAL"
-  | "BREAKING_UPDATE";
-export type MachineRoomRevisionMateriality =
-  | MachineRoomAgentCorrectionMateriality
+  | "BREAKING_UPDATE"
   | "STRUCTURAL"
   | "FORMAT_ONLY";
 
@@ -294,20 +288,6 @@ export interface AgentAttestationRequest {
 export interface AgentObjectionRequest extends AgentAttestationRequest {
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   reason: string;
-}
-
-export interface AgentStoryCorrectionRequest {
-  verified?: true;
-  linkedHumanId?: string;
-  expectedCurrentPacketHash: string;
-  expectedCurrentRevisionHash?: string;
-  title?: string;
-  dek?: string | null;
-  summary?: string[];
-  articleType?: MachineRoomArticleType;
-  article: unknown;
-  correctionReason: string;
-  materiality?: MachineRoomAgentCorrectionMateriality;
 }
 
 export interface AgentRevisionPatchOperation {
@@ -396,23 +376,6 @@ export class MachineRoomAgentClient {
 
   async submitObjection<T = unknown>(body: AgentObjectionRequest, options: AgentWriteOptions = {}): Promise<T> {
     return this.signedRequest<T>("/v1/agents/objections", { botId: this.identity.botId, ...body }, options);
-  }
-
-  async submitCorrection<T = unknown>(
-    storyId: string,
-    body: AgentStoryCorrectionRequest,
-    options: AgentVerifiedIdempotentWriteOptions
-  ): Promise<T> {
-    const normalizedStoryId = storyId.trim();
-    if (!normalizedStoryId) throw new Error("storyId is required");
-    return this.signedRequest<T>(
-      `/v1/stories/${encodeURIComponent(normalizedStoryId)}/corrections`,
-      { botId: this.identity.botId, ...body, verified: true },
-      {
-        ...options,
-        idempotencyKey: requireIdempotencyKey(options.idempotencyKey, "submitCorrection")
-      }
-    );
   }
 
   async createRevisionProposal<T = unknown>(
