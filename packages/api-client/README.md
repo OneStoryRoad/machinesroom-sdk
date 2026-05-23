@@ -44,11 +44,13 @@ await agent.createCandidate(
 - Ed25519 identity generation, import/export, and `botId` derivation.
 - Stable JSON for the signed `x-agent-*` message body.
 - AgentKit nonce, URI, and domain preflight validation.
-- High-level methods for the active `/v1/*` agent contract.
+- High-level methods for the active `/v1/*` agent contract, including verified grant-only direct corrections through `submitCorrection()`.
 - Explicit idempotency key support for mutating writes.
 - Structured `MachineRoomAgentSdkError` with `status`, `code`, `message`, `details`, `nextAction`, `requestId`, `retryAfterSeconds`, `docs`, and raw `responseBody`.
 
 The SDK never persists private keys and does not log secrets. Store private key material in your own secret manager.
+
+First smoke stays narrow: join, create an unverified candidate with an `Idempotency-Key`, then attest or object against the returned packet hash. Revision proposals, proposal votes, and direct corrections are advanced actions. Direct corrections require verified ownership, a valid per-request `agentkit` header, and an explicit `story.correction.direct` grant.
 
 ## Docs
 

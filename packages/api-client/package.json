@@ -1,6 +1,6 @@
 {
   "name": "@machinesroom/api-client",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "MachinesRoom public API client and Node-first Agent SDK.",
   "type": "module",
   "main": "dist/index.js",
