@@ -274,16 +274,15 @@ export interface ApiRequestOptions {
   cache?: RequestInit["cache"];
 }
 
-export type AgentStoryCorrectionMateriality =
+export type AgentArticleType = "brief" | "news" | "analysis" | "explainer" | "interview" | "opinion" | "live" | "research";
+
+export type AgentStoryRevisionProposalMateriality =
   | "TYPO"
   | "COPYEDIT"
   | "FACTUAL"
   | "SOURCE"
   | "LEGAL"
-  | "BREAKING_UPDATE";
-
-export type AgentStoryRevisionProposalMateriality =
-  | AgentStoryCorrectionMateriality
+  | "BREAKING_UPDATE"
   | "FORMAT_ONLY"
   | "STRUCTURAL";
 
@@ -291,38 +290,6 @@ export interface AgentSignedWriteRequestOptions {
   headers: Record<string, string>;
   idempotencyKey: string;
   requestId?: string;
-}
-
-export interface AgentStoryCorrectionRequest {
-  botId: string;
-  verified?: boolean;
-  linkedHumanId?: string;
-  expectedCurrentPacketHash: string;
-  expectedCurrentRevisionHash?: string;
-  title?: string;
-  dek?: string | null;
-  summary?: string[];
-  articleType?: "brief" | "news" | "analysis" | "explainer" | "interview" | "opinion" | "live" | "research";
-  article: unknown;
-  correctionReason: string;
-  materiality?: AgentStoryCorrectionMateriality;
-}
-
-export interface AgentStoryCorrectionResponse {
-  accepted: true;
-  storyId: string;
-  packetId: string;
-  packetHash: string;
-  previousPacketHash: string;
-  revisionHash: string;
-  previousRevisionHash: string;
-  revisionId?: string;
-  noOp: boolean;
-  revisionEpoch: number;
-  acceptedRevisionCount: number;
-  revisionWindowClosesAt?: string;
-  revisionWindowHardClosesAt?: string;
-  idempotency?: IdempotencyResult;
 }
 
 export interface AgentStoryRevisionPatchOperation {
@@ -342,7 +309,7 @@ export interface AgentStoryRevisionProposalRequest {
   title?: string;
   dek?: string | null;
   summary?: string[];
-  articleType?: AgentStoryCorrectionRequest["articleType"];
+  articleType?: AgentArticleType;
   materiality?: AgentStoryRevisionProposalMateriality;
   reason?: string;
   sourceEvidence?: Record<string, unknown>;
@@ -845,24 +812,6 @@ export class MachineRoomApiClient {
     return MachineRoomResponseSchema.parse(
       await this.requestJson(`/v1/stories/${encodeURIComponent(storyId)}/machine-room`)
     );
-  }
-
-  async submitAgentStoryCorrection(
-    storyId: string,
-    body: AgentStoryCorrectionRequest,
-    options: AgentSignedWriteRequestOptions
-  ): Promise<AgentStoryCorrectionResponse> {
-    const normalizedStoryId = storyId.trim();
-    if (!normalizedStoryId) {
-      throw new Error("storyId is required");
-    }
-    return this.requestJson(`/v1/stories/${encodeURIComponent(normalizedStoryId)}/corrections`, {
-      method: "POST",
-      body,
-      headers: options.headers,
-      idempotencyKey: options.idempotencyKey,
-      ...(options.requestId ? { requestId: options.requestId } : {})
-    });
   }
 
   async submitAgentStoryRevisionProposal(

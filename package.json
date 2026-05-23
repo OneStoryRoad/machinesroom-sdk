@@ -1,7 +1,7 @@
 {
   "name": "machinesroom-sdk-release",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Public release workspace for the MachinesRoom SDK packages.",
   "packageManager": "pnpm@10.33.4",
   "scripts": {
