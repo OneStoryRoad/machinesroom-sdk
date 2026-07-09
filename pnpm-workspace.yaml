@@ -1,2 +1,85 @@
 packages:
-  - packages/*
+  - "packages/*"
+
+# Supply-chain hardening: wait 7 days before resolving newly published packages.
+minimumReleaseAge: 10080
+minimumReleaseAgeExclude:
+  # Security patch for GHSA-58qx-3vcg-4xpx / CVE-2026-45736 and GHSA-96hv-2xvq-fx4p.
+  - ws
+  # Security patch for GHSA-5375-pq7m-f5r2 / GHSA-99f4-grh7-6pcq.
+  - "@grpc/grpc-js"
+  # Security patch for GHSA-gv7w-rqvm-qjhr / GHSA-g7r4-m6w7-qqqr.
+  - esbuild
+  # Platform packages released with the esbuild security patch above.
+  - "@esbuild/aix-ppc64"
+  - "@esbuild/android-arm"
+  - "@esbuild/android-arm64"
+  - "@esbuild/android-x64"
+  - "@esbuild/darwin-arm64"
+  - "@esbuild/darwin-x64"
+  - "@esbuild/freebsd-arm64"
+  - "@esbuild/freebsd-x64"
+  - "@esbuild/linux-arm"
+  - "@esbuild/linux-arm64"
+  - "@esbuild/linux-ia32"
+  - "@esbuild/linux-loong64"
+  - "@esbuild/linux-mips64el"
+  - "@esbuild/linux-ppc64"
+  - "@esbuild/linux-riscv64"
+  - "@esbuild/linux-s390x"
+  - "@esbuild/linux-x64"
+  - "@esbuild/netbsd-arm64"
+  - "@esbuild/netbsd-x64"
+  - "@esbuild/openbsd-arm64"
+  - "@esbuild/openbsd-x64"
+  - "@esbuild/openharmony-arm64"
+  - "@esbuild/sunos-x64"
+  - "@esbuild/win32-arm64"
+  - "@esbuild/win32-ia32"
+  - "@esbuild/win32-x64"
+  # Security patch for GHSA-f38q-mgvj-vph7 / GHSA-wcpc-wj8m-hjx6 / GHSA-94rc-8x27-4472.
+  - protobufjs
+  # Security patch for GHSA-8988-4f7v-96qf.
+  - "@opentelemetry/core"
+  # Security patch for GHSA-v6wh-96g9-6wx3 / GHSA-fx2h-pf6j-xcff.
+  - vite
+  # Security patch for GHSA-h67p-54hq-rp68.
+  - js-yaml
+  # Security patch for GHSA-268h-hp4c-crq3 / GHSA-wqvq-jvpq-h66f / GHSA-r7g4-qg5f-qqm2.
+  - nodemailer
+  # Security patch for GHSA-q8mj-m7cp-5q26 affecting the test-only superagent -> qs path.
+  - qs
+  # Security patch for GHSA-hmw2-7cc7-3qxx affecting the test-only superagent -> form-data path.
+  - form-data
+  # Security patch for GHSA-ph9p-34f9-6g65 / CVE-2026-44705 via solc -> tmp.
+  - tmp
+
+overrides:
+  "@grpc/grpc-js": 1.14.4
+  "@opentelemetry/core": 2.8.0
+  esbuild: 0.28.1
+  form-data: 4.0.6
+  hono: 4.12.26
+  js-yaml: 4.2.0
+  nodemailer: 9.0.1
+  qs: 6.15.2
+  schema-utils@4.3.3>ajv: 8.18.0
+  rollup: 4.60.2
+  serialize-javascript: 7.0.5
+  undici: 7.28.0
+  yaml: 2.8.3
+  fast-uri: 3.1.2
+  flatted: 3.4.2
+  postcss: 8.5.13
+  vite: 7.3.5
+  uuid: 14.0.0
+  protobufjs@^7.0.0: 7.6.4
+  protobufjs@^8.0.0: 8.6.4
+  path-to-regexp@0.1.12: 0.1.13
+  brace-expansion@1.1.12: 1.1.13
+  brace-expansion@2.0.2: 2.0.3
+  picomatch@2.3.1: 2.3.2
+  picomatch@4.0.3: 4.0.4
+  solc>tmp: 0.2.7
+  ws: 8.21.0
+  "@hono/node-server": 1.19.14

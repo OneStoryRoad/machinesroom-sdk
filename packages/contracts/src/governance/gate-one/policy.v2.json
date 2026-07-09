@@ -1,0 +1,559 @@
+{
+  "policyId": "gate-one-v2-mvp",
+  "version": "2.2.0",
+  "blueprint": {
+    "id": "machinesroom-gate-one-v2",
+    "version": "1.0.0",
+    "decisionDate": "2026-06-24"
+  },
+  "constitutionDigest": "sha256:af20a5b68b6433aa9740aaea39fc6c8c1d7b9b004f51af8f5daf2476b8ccd47a",
+  "invariants": [
+    {
+      "id": "INV-001",
+      "rule": "publication_is_fail_closed",
+      "expression": "PacketIsCurrent && AllRequiredPreflightsSatisfied && AllRequiredUniversalLanesSatisfied && AllRequiredSpecialistsSatisfied && AllRequiredDisclosuresRendered && IndependencePolicySatisfied && ConsensusWeightPolicySatisfied && SafetyGateDecision==ALLOW && NoActiveLegalHold && NoActiveAdministrativeKillSwitch"
+    },
+    {
+      "id": "INV-002",
+      "rule": "gate_one_is_bot_only_prepublication"
+    },
+    {
+      "id": "INV-003",
+      "rule": "gate_two_is_human_only_postpublication"
+    },
+    {
+      "id": "INV-004",
+      "rule": "governance_writes_are_signed_replay_protected_and_hash_bound"
+    },
+    {
+      "id": "INV-005",
+      "rule": "material_packet_mutation_invalidates_all_gate_one_results"
+    },
+    {
+      "id": "INV-006",
+      "rule": "required_control_missing_or_unknown_never_counts_as_pass"
+    },
+    {
+      "id": "INV-007",
+      "rule": "safety_gate_remains_separate"
+    },
+    {
+      "id": "INV-008",
+      "rule": "legal_rights_is_conditional_not_universal"
+    },
+    {
+      "id": "INV-009",
+      "rule": "gate_one_v2_remains_off_chain"
+    }
+  ],
+  "activation": {
+    "globalState": "ENFORCE",
+    "canaryPercent": 100,
+    "componentStates": {
+      "PACKET_INTEGRITY_V1": "ENFORCE",
+      "PUBLICATION_QA_V1": "ENFORCE",
+      "RIGHTS_ROUTING_V1": "ENFORCE",
+      "LIFECYCLE_READINESS_V1": "ENFORCE",
+      "WRITER": "ENFORCE",
+      "FACT_CHECK": "ENFORCE",
+      "RISK": "ENFORCE",
+      "SOURCE_DIVERSITY": "ENFORCE",
+      "FAIRNESS_REPLY": "ENFORCE",
+      "PROVENANCE_AUTH": "ENFORCE",
+      "EDITORIAL_INTEGRITY": "SHADOW",
+      "SPECIALIST_ROUTING": "ENFORCE",
+      "INDEPENDENCE": "ENFORCE",
+      "DISCLOSURE_RECEIPTS": "ENFORCE",
+      "PUBLIC_RECEIPTS": "ENFORCE",
+      "CONSENSUS_V2": "ENFORCE"
+    }
+  },
+  "universalLanes": [
+    {
+      "id": "WRITER",
+      "label": "Writer",
+      "universal": true,
+      "state": "ENFORCE",
+      "rubricVersion": "WRITER_RUBRIC_V1",
+      "owner": "Editorial Bot Governance",
+      "summary": "Assembles a coherent, supportable packet with declared method, materiality, claims, and disclosures.",
+      "requiredCheckIds": [
+        "WRITER.CLAIMS_DECLARED",
+        "WRITER.MATERIALITY_ASSIGNED",
+        "WRITER.ARTICLE_TYPE_CORRECT",
+        "WRITER.METHOD_DECLARED",
+        "WRITER.CLAIM_BLOCK_LINKS_VALID",
+        "WRITER.KNOWN_UNKNOWNS_DECLARED",
+        "WRITER.DISCLOSURES_DECLARED",
+        "WRITER.NO_UNSUPPORTED_ASSERTION_KNOWN"
+      ],
+      "checks": [
+        { "id": "WRITER.CLAIMS_DECLARED", "label": "Material claims declared" },
+        { "id": "WRITER.MATERIALITY_ASSIGNED", "label": "Materiality assigned" },
+        { "id": "WRITER.ARTICLE_TYPE_CORRECT", "label": "Article type is correct" },
+        { "id": "WRITER.METHOD_DECLARED", "label": "Method declared" },
+        { "id": "WRITER.CLAIM_BLOCK_LINKS_VALID", "label": "Claim and article block links resolve" },
+        { "id": "WRITER.KNOWN_UNKNOWNS_DECLARED", "label": "Known unknowns declared" },
+        { "id": "WRITER.DISCLOSURES_DECLARED", "label": "Initial disclosures declared" },
+        { "id": "WRITER.NO_UNSUPPORTED_ASSERTION_KNOWN", "label": "No known unsupported assertion" }
+      ]
+    },
+    {
+      "id": "FACT_CHECK",
+      "label": "Fact Check",
+      "universal": true,
+      "state": "ENFORCE",
+      "rubricVersion": "FACT_CHECK_RUBRIC_V1",
+      "owner": "Editorial Bot Governance",
+      "summary": "Evaluates every material claim against evidence at the strength and certainty stated.",
+      "requiredCheckIds": [
+        "FACT.CLAIM_SUPPORT",
+        "FACT.CLAIM_STRENGTH_MATCH",
+        "FACT.ATTRIBUTION",
+        "FACT.QUOTE_CONTEXT_BASIC",
+        "FACT.NAMES_DATES_NUMBERS",
+        "FACT.CALCULATION_REPRODUCIBLE",
+        "FACT.CONTRADICTIONS_DISCLOSED",
+        "FACT.EPISTEMIC_STATUS",
+        "FACT.TEMPORAL_VALIDITY",
+        "FACT.ARTICLE_LEDGER_PARITY"
+      ],
+      "checks": [
+        { "id": "FACT.CLAIM_SUPPORT", "label": "Claims supported by evidence" },
+        { "id": "FACT.CLAIM_STRENGTH_MATCH", "label": "Claim strength matches evidence" },
+        { "id": "FACT.ATTRIBUTION", "label": "Attribution is correct" },
+        { "id": "FACT.QUOTE_CONTEXT_BASIC", "label": "Quote context is sufficient" },
+        { "id": "FACT.NAMES_DATES_NUMBERS", "label": "Names, dates, and numbers check out" },
+        { "id": "FACT.CALCULATION_REPRODUCIBLE", "label": "Calculations are reproducible" },
+        { "id": "FACT.CONTRADICTIONS_DISCLOSED", "label": "Contradictions are disclosed" },
+        { "id": "FACT.EPISTEMIC_STATUS", "label": "Epistemic status is accurate" },
+        { "id": "FACT.TEMPORAL_VALIDITY", "label": "Temporal validity is addressed" },
+        { "id": "FACT.ARTICLE_LEDGER_PARITY", "label": "Article and claim ledger align" }
+      ]
+    },
+    {
+      "id": "RISK",
+      "label": "Risk",
+      "universal": true,
+      "state": "ENFORCE",
+      "rubricVersion": "RISK_RUBRIC_V1",
+      "owner": "Editorial Bot Governance",
+      "summary": "Assesses ethical proportionality, privacy, source safety, minors, doxxing, and foreseeable harm.",
+      "requiredCheckIds": [
+        "RISK.PRIVACY",
+        "RISK.MINORS_VULNERABLE",
+        "RISK.DOXXING_REIDENTIFICATION",
+        "RISK.SOURCE_SAFETY",
+        "RISK.GRAPHIC_TRAUMA",
+        "RISK.HARASSMENT_AMPLIFICATION",
+        "RISK.IMPLICATION_OF_GUILT",
+        "RISK.PUBLIC_INTEREST_PROPORTIONALITY",
+        "RISK.MITIGATIONS_EFFECTIVE"
+      ],
+      "checks": [
+        { "id": "RISK.PRIVACY", "label": "Privacy risk is proportionate" },
+        { "id": "RISK.MINORS_VULNERABLE", "label": "Minors and vulnerable people are protected" },
+        { "id": "RISK.DOXXING_REIDENTIFICATION", "label": "Doxxing and re-identification risks are controlled" },
+        { "id": "RISK.SOURCE_SAFETY", "label": "Source safety risks are controlled" },
+        { "id": "RISK.GRAPHIC_TRAUMA", "label": "Graphic or traumatic material is handled safely" },
+        { "id": "RISK.HARASSMENT_AMPLIFICATION", "label": "Harassment amplification risk is controlled" },
+        { "id": "RISK.IMPLICATION_OF_GUILT", "label": "Unjustified implication of guilt is avoided" },
+        { "id": "RISK.PUBLIC_INTEREST_PROPORTIONALITY", "label": "Public interest is proportionate to harm" },
+        { "id": "RISK.MITIGATIONS_EFFECTIVE", "label": "Mitigations are effective" }
+      ]
+    },
+    {
+      "id": "SOURCE_DIVERSITY",
+      "label": "Source Diversity",
+      "universal": true,
+      "state": "ENFORCE",
+      "rubricVersion": "SOURCE_DIVERSITY_RUBRIC_V1",
+      "owner": "Editorial Bot Governance",
+      "summary": "Evaluates origin clusters, ownership concentration, directness, source classes, and derivative streams.",
+      "requiredCheckIds": [
+        "DIVERSITY.ORIGIN_CLUSTERS",
+        "DIVERSITY.OWNER_CONCENTRATION",
+        "DIVERSITY.PRIMARY_DERIVATIVE_BALANCE",
+        "DIVERSITY.INSTITUTIONAL_MONOCULTURE",
+        "DIVERSITY.LOCALITY_RELEVANCE",
+        "DIVERSITY.LANGUAGE_RELEVANCE",
+        "DIVERSITY.SOURCE_CLASS_COVERAGE",
+        "DIVERSITY.SINGLE_STREAM_DISCLOSURE"
+      ],
+      "checks": [
+        { "id": "DIVERSITY.ORIGIN_CLUSTERS", "label": "Origin clusters are identified" },
+        { "id": "DIVERSITY.OWNER_CONCENTRATION", "label": "Owner concentration is assessed" },
+        { "id": "DIVERSITY.PRIMARY_DERIVATIVE_BALANCE", "label": "Primary and derivative balance is sufficient" },
+        { "id": "DIVERSITY.INSTITUTIONAL_MONOCULTURE", "label": "Institutional monoculture is assessed" },
+        { "id": "DIVERSITY.LOCALITY_RELEVANCE", "label": "Locality relevance is assessed" },
+        { "id": "DIVERSITY.LANGUAGE_RELEVANCE", "label": "Language relevance is assessed" },
+        { "id": "DIVERSITY.SOURCE_CLASS_COVERAGE", "label": "Source class coverage is sufficient" },
+        { "id": "DIVERSITY.SINGLE_STREAM_DISCLOSURE", "label": "Single-stream evidence is disclosed when allowed" }
+      ]
+    },
+    {
+      "id": "FAIRNESS_REPLY",
+      "label": "Fairness and Reply",
+      "universal": true,
+      "state": "ENFORCE",
+      "rubricVersion": "FAIRNESS_REPLY_RUBRIC_V1",
+      "owner": "Editorial Bot Governance",
+      "summary": "Evaluates right-of-reply, counterevidence, uncertainty, false balance, and fair treatment of affected subjects.",
+      "requiredCheckIds": [
+        "FAIRNESS.AFFECTED_STAKEHOLDERS",
+        "FAIRNESS.RIGHT_OF_REPLY_REQUIRED",
+        "FAIRNESS.RIGHT_OF_REPLY_ATTEMPTED",
+        "FAIRNESS.RESPONSE_ACCURATELY_INCLUDED",
+        "FAIRNESS.COUNTEREVIDENCE",
+        "FAIRNESS.ALTERNATIVE_EXPLANATIONS",
+        "FAIRNESS.KNOWN_UNKNOWNS",
+        "FAIRNESS.UNCERTAINTY_DUE_WEIGHT",
+        "FAIRNESS.FALSE_BALANCE_AVOIDED",
+        "FAIRNESS.SERIOUS_ALLEGATION_LABELING"
+      ],
+      "checks": [
+        { "id": "FAIRNESS.AFFECTED_STAKEHOLDERS", "label": "Affected stakeholders are identified" },
+        { "id": "FAIRNESS.RIGHT_OF_REPLY_REQUIRED", "label": "Reply applicability is policy-routed" },
+        { "id": "FAIRNESS.RIGHT_OF_REPLY_ATTEMPTED", "label": "Required reply attempt is documented" },
+        { "id": "FAIRNESS.RESPONSE_ACCURATELY_INCLUDED", "label": "Responses are accurately represented" },
+        { "id": "FAIRNESS.COUNTEREVIDENCE", "label": "Counterevidence receives due treatment" },
+        { "id": "FAIRNESS.ALTERNATIVE_EXPLANATIONS", "label": "Alternative explanations receive due treatment" },
+        { "id": "FAIRNESS.KNOWN_UNKNOWNS", "label": "Known unknowns are visible" },
+        { "id": "FAIRNESS.UNCERTAINTY_DUE_WEIGHT", "label": "Uncertainty has due weight" },
+        { "id": "FAIRNESS.FALSE_BALANCE_AVOIDED", "label": "False balance is avoided" },
+        { "id": "FAIRNESS.SERIOUS_ALLEGATION_LABELING", "label": "Serious allegations are labeled and bounded" }
+      ]
+    },
+    {
+      "id": "PROVENANCE_AUTH",
+      "label": "Provenance and Authenticity",
+      "universal": true,
+      "state": "ENFORCE",
+      "rubricVersion": "PROVENANCE_AUTH_RUBRIC_V1",
+      "owner": "Editorial Bot Governance",
+      "summary": "Validates evidence lineage, artifact hashes, transformations, synthetic status, attribution, and conflicts.",
+      "requiredCheckIds": [
+        "PROV.CLAIM_EVIDENCE_LINKS",
+        "PROV.ARTIFACT_HASHES",
+        "PROV.ORIGIN_TRACEABLE",
+        "PROV.TRANSFORMATIONS_DECLARED",
+        "PROV.MEDIA_CREDENTIAL_STATUS",
+        "PROV.SYNTHETIC_ALTERED_STATUS",
+        "PROV.QUOTE_DOCUMENT_LINEAGE",
+        "PROV.ANONYMOUS_SOURCE_BASIS",
+        "PROV.CITATION_LAUNDERING",
+        "PROV.CONFLICT_DISCLOSURE",
+        "PROV.AI_USE_DISCLOSURE"
+      ],
+      "checks": [
+        { "id": "PROV.CLAIM_EVIDENCE_LINKS", "label": "Claim and evidence links are traceable" },
+        { "id": "PROV.ARTIFACT_HASHES", "label": "Artifact hashes are recorded where applicable" },
+        { "id": "PROV.ORIGIN_TRACEABLE", "label": "Evidence origin is traceable" },
+        { "id": "PROV.TRANSFORMATIONS_DECLARED", "label": "Transformations are declared" },
+        { "id": "PROV.MEDIA_CREDENTIAL_STATUS", "label": "Media credential status is recorded" },
+        { "id": "PROV.SYNTHETIC_ALTERED_STATUS", "label": "Synthetic or altered status is labeled" },
+        { "id": "PROV.QUOTE_DOCUMENT_LINEAGE", "label": "Quote and document lineage is traceable" },
+        { "id": "PROV.ANONYMOUS_SOURCE_BASIS", "label": "Anonymous-source basis is recorded safely" },
+        { "id": "PROV.CITATION_LAUNDERING", "label": "Citation laundering is checked" },
+        { "id": "PROV.CONFLICT_DISCLOSURE", "label": "Conflicts are disclosed or recused" },
+        { "id": "PROV.AI_USE_DISCLOSURE", "label": "Material AI use is disclosed" }
+      ]
+    }
+  ],
+  "shadowLanes": [
+    {
+      "id": "EDITORIAL_INTEGRITY",
+      "label": "Editorial Integrity",
+      "universal": false,
+      "state": "SHADOW",
+      "rubricVersion": "EDITORIAL_INTEGRITY_RUBRIC_V1",
+      "owner": "Editorial Standards Calibration",
+      "summary": "Advisory MVP lane for headline/body alignment, caveat prominence, chronology, quote context, article framing, and disclosure placement.",
+      "requiredCheckIds": [
+        "EDITOR.HEADLINE_BODY_ALIGNMENT",
+        "EDITOR.CAVEAT_PROMINENCE",
+        "EDITOR.CHRONOLOGY_CLARITY",
+        "EDITOR.QUOTE_CONTEXT",
+        "EDITOR.CAPTION_SEMANTICS",
+        "EDITOR.ARTICLE_TYPE_FRAMING",
+        "EDITOR.DISCLOSURE_PLACEMENT",
+        "EDITOR.SENSATIONALIZATION"
+      ],
+      "checks": [
+        { "id": "EDITOR.HEADLINE_BODY_ALIGNMENT", "label": "Headline and body align" },
+        { "id": "EDITOR.CAVEAT_PROMINENCE", "label": "Caveats are prominent enough" },
+        { "id": "EDITOR.CHRONOLOGY_CLARITY", "label": "Chronology is clear" },
+        { "id": "EDITOR.QUOTE_CONTEXT", "label": "Quote context is sufficient" },
+        { "id": "EDITOR.CAPTION_SEMANTICS", "label": "Captions are semantically accurate" },
+        { "id": "EDITOR.ARTICLE_TYPE_FRAMING", "label": "Article type framing is accurate" },
+        { "id": "EDITOR.DISCLOSURE_PLACEMENT", "label": "Disclosure placement is effective" },
+        { "id": "EDITOR.SENSATIONALIZATION", "label": "Sensationalization is avoided" }
+      ]
+    }
+  ],
+  "preflights": [
+    {
+      "id": "PACKET_INTEGRITY_V1",
+      "version": "1.0.0",
+      "state": "ENFORCE",
+      "owner": "Trust Platform",
+      "failureBehavior": "FAIL_CLOSED",
+      "summary": "Validates packet schema, canonical hash, stable IDs, references, public/sealed separation, signed-write admission, and bounded input size.",
+      "checks": [
+        { "id": "PKT.SCHEMA_VERSION_SUPPORTED", "label": "Schema version is supported" },
+        { "id": "PKT.POLICY_REFERENCES_PRESENT", "label": "Policy and rubric references exist" },
+        { "id": "PKT.HASH_RECOMPUTES", "label": "Packet hash recomputes exactly" },
+        { "id": "PKT.STABLE_IDS_UNIQUE", "label": "Stable IDs are unique" },
+        { "id": "PKT.MATERIAL_CLAIMS_HAVE_EVIDENCE", "label": "Material factual claims link to evidence" },
+        { "id": "PKT.PUBLIC_SEALED_SPLIT", "label": "Public envelope contains no sealed fields" },
+        { "id": "PKT.SIGNED_WRITE_CONTEXT_VALID", "label": "Signed-write admission context is valid" },
+        { "id": "PKT.SIZE_AND_DEPTH_BOUNDS", "label": "Packet size and JSON depth are bounded" }
+      ]
+    },
+    {
+      "id": "PUBLICATION_QA_V1",
+      "version": "1.0.0",
+      "state": "ENFORCE",
+      "owner": "Trust Platform",
+      "failureBehavior": "FAIL_CLOSED",
+      "summary": "Checks deterministic publication structure, labels, accessibility, localization shape, links, render slots, and correction hooks.",
+      "checks": [
+        { "id": "QA.ARTICLE_TYPE_LABEL", "label": "Article type label is valid" },
+        { "id": "QA.REQUIRED_SLOTS_PRESENT", "label": "Required title, body, methods, and disclosure slots exist" },
+        { "id": "QA.ACCESSIBILITY_MEDIA", "label": "Material media has alt text, captions, or transcript" },
+        { "id": "QA.CLAIM_CITATION_ANCHORS", "label": "Claim and citation anchors resolve" },
+        { "id": "QA.SSRF_SAFE_LINKS", "label": "External link checks use SSRF-safe infrastructure" },
+        { "id": "QA.TRANSLATION_PARITY", "label": "Translation parity is preserved" },
+        { "id": "QA.CORRECTION_HOOKS", "label": "Correction and challenge hooks are present" }
+      ]
+    },
+    {
+      "id": "RIGHTS_ROUTING_V1",
+      "version": "1.0.0",
+      "state": "ENFORCE",
+      "owner": "Trust Platform",
+      "failureBehavior": "FAIL_CLOSED",
+      "summary": "Classifies rights-sensitive content and deterministically routes legal/rights review, holds, remediation, or disclosures without claiming legal clearance.",
+      "checks": [
+        { "id": "RIGHTS.SERIOUS_ALLEGATION", "label": "Serious allegation trigger is classified" },
+        { "id": "RIGHTS.PRIVATE_OR_VULNERABLE_PERSON", "label": "Private, minor, or vulnerable person trigger is classified" },
+        { "id": "RIGHTS.SENSITIVE_PERSONAL_INFO", "label": "Sensitive personal information trigger is classified" },
+        { "id": "RIGHTS.LEAKED_CONFIDENTIAL_MATERIAL", "label": "Leaked or confidential material trigger is classified" },
+        { "id": "RIGHTS.COPYRIGHT_SENSITIVE_USE", "label": "Copyright-sensitive source use is classified" },
+        { "id": "RIGHTS.COUNSEL_HOLD_BOUNDARY", "label": "Human counsel hold remains outside Gate One signatures" }
+      ]
+    },
+    {
+      "id": "LIFECYCLE_READINESS_V1",
+      "version": "1.0.0",
+      "state": "ENFORCE",
+      "owner": "Trust Platform",
+      "failureBehavior": "FAIL_CLOSED",
+      "summary": "Confirms corrections, retractions, disclosures, appeals, versions, expiry, translations, propagation, and cache invalidation can work after publication.",
+      "checks": [
+        { "id": "LIFE.CLAIM_LEDGER_ADDRESSABLE", "label": "Material claims are addressable" },
+        { "id": "LIFE.VERSION_CHAIN_PRESENT", "label": "Version and parent packet chain are present" },
+        { "id": "LIFE.CORRECTION_TAXONOMY", "label": "Correction and retraction taxonomy exists" },
+        { "id": "LIFE.CHALLENGE_ENTRYPOINT", "label": "Challenge and appeal route is configured" },
+        { "id": "LIFE.PROPAGATION_TARGETS", "label": "Correction propagation targets are known" },
+        { "id": "LIFE.PUBLIC_LINEAGE_RENDERABLE", "label": "Public lineage and state history can render" },
+        { "id": "LIFE.CACHE_INVALIDATION", "label": "Cache and feed invalidation dependencies are known" }
+      ]
+    }
+  ],
+  "specialists": [
+    {
+      "id": "LEGAL_RIGHTS",
+      "label": "Legal/Rights",
+      "state": "ENFORCE",
+      "conditional": true,
+      "minimumSigners": 1,
+      "owner": "Rights Routing",
+      "triggerRuleCodes": [
+        "RIGHTS.SERIOUS_ALLEGATION",
+        "RIGHTS.PRIVATE_OR_VULNERABLE_PERSON",
+        "RIGHTS.SENSITIVE_PERSONAL_INFO",
+        "RIGHTS.LEAKED_CONFIDENTIAL_MATERIAL",
+        "RIGHTS.COPYRIGHT_SENSITIVE_USE"
+      ]
+    },
+    {
+      "id": "DOMAIN_EXPERT",
+      "label": "Domain Expert",
+      "state": "ENFORCE",
+      "conditional": true,
+      "minimumSigners": 1,
+      "owner": "Specialist Routing",
+      "triggerRuleCodes": ["SPEC.DOMAIN_HIGH_CONSEQUENCE"]
+    },
+    {
+      "id": "VISUAL_FORENSICS",
+      "label": "Visual Forensics",
+      "state": "ENFORCE",
+      "conditional": true,
+      "minimumSigners": 1,
+      "owner": "Specialist Routing",
+      "triggerRuleCodes": ["SPEC.DISPUTED_MEDIA", "PROV.SYNTHETIC_ALTERED_STATUS"]
+    },
+    {
+      "id": "LOCAL_LANGUAGE_CONTEXT",
+      "label": "Local/Language Context",
+      "state": "ENFORCE",
+      "conditional": true,
+      "minimumSigners": 1,
+      "owner": "Specialist Routing",
+      "triggerRuleCodes": ["SPEC.LOCAL_LANGUAGE_CONTEXT"]
+    },
+    {
+      "id": "DATA_METHODOLOGY",
+      "label": "Data/Methodology",
+      "state": "ENFORCE",
+      "conditional": true,
+      "minimumSigners": 1,
+      "owner": "Specialist Routing",
+      "triggerRuleCodes": ["SPEC.DATA_METHODOLOGY"]
+    }
+  ],
+  "verdicts": [
+    {
+      "id": "PASS",
+      "countsTowardPass": true,
+      "requiresDisclosureReceipt": false,
+      "blocksPublication": false,
+      "hardVeto": false,
+      "summary": "Rubric is satisfied with no additional required disclosure."
+    },
+    {
+      "id": "PASS_WITH_DISCLOSURE",
+      "countsTowardPass": true,
+      "requiresDisclosureReceipt": true,
+      "blocksPublication": false,
+      "hardVeto": false,
+      "summary": "Rubric is satisfied only after named disclosure render receipts are verified for the current packet."
+    },
+    {
+      "id": "REVISE",
+      "countsTowardPass": false,
+      "requiresDisclosureReceipt": false,
+      "blocksPublication": true,
+      "hardVeto": false,
+      "summary": "Correctable defect requiring a new packet before publication."
+    },
+    {
+      "id": "QUARANTINE",
+      "countsTowardPass": false,
+      "requiresDisclosureReceipt": false,
+      "blocksPublication": true,
+      "hardVeto": false,
+      "summary": "High-severity or uncertain issue requiring escalation, remediation, or replacement packet."
+    },
+    {
+      "id": "BLOCK",
+      "countsTowardPass": false,
+      "requiresDisclosureReceipt": false,
+      "blocksPublication": true,
+      "hardVeto": true,
+      "summary": "Critical defect for this packet; it cannot publish."
+    },
+    {
+      "id": "UNAVAILABLE",
+      "countsTowardPass": false,
+      "requiresDisclosureReceipt": false,
+      "blocksPublication": true,
+      "hardVeto": false,
+      "summary": "Required reviewer, tool, or evidence is unavailable; eligible backup or pending state is required."
+    }
+  ],
+  "profiles": {
+    "BREAKING": {
+      "universalLanes": ["WRITER", "FACT_CHECK", "RISK", "SOURCE_DIVERSITY", "FAIRNESS_REPLY", "PROVENANCE_AUTH"],
+      "factCheckSigners": 2,
+      "writerSigners": 1,
+      "riskSigners": 1,
+      "sourceDiversitySigners": 1,
+      "fairnessSigners": 1,
+      "provenanceSigners": 1,
+      "editorialIntegrityShadowSigners": 1,
+      "defaultAttestationTtlMinutes": 60,
+      "allowBreakingPendingReplyDisclosure": true
+    },
+    "STANDARD": {
+      "universalLanes": ["WRITER", "FACT_CHECK", "RISK", "SOURCE_DIVERSITY", "FAIRNESS_REPLY", "PROVENANCE_AUTH"],
+      "factCheckSigners": 2,
+      "writerSigners": 1,
+      "riskSigners": 1,
+      "sourceDiversitySigners": 1,
+      "fairnessSigners": 1,
+      "provenanceSigners": 1,
+      "editorialIntegrityShadowSigners": 1,
+      "defaultAttestationTtlMinutes": 1440,
+      "allowBreakingPendingReplyDisclosure": false
+    },
+    "DEEP": {
+      "universalLanes": ["WRITER", "FACT_CHECK", "RISK", "SOURCE_DIVERSITY", "FAIRNESS_REPLY", "PROVENANCE_AUTH"],
+      "factCheckSigners": 2,
+      "writerSigners": 1,
+      "riskSigners": 1,
+      "sourceDiversitySigners": 1,
+      "fairnessSigners": 2,
+      "provenanceSigners": 2,
+      "editorialIntegrityShadowSigners": 1,
+      "defaultAttestationTtlMinutes": 2880,
+      "allowBreakingPendingReplyDisclosure": false
+    }
+  },
+  "highRiskOverlay": {
+    "factCheckSigners": 3,
+    "riskSigners": 2,
+    "fairnessSigners": 2,
+    "provenanceSigners": 2,
+    "modelFamilyMinimum": 3,
+    "retrievalProviderMinimum": 2,
+    "specialistRouting": "STRICT"
+  },
+  "independence": {
+    "writerMustNotReview": ["FACT_CHECK", "FAIRNESS_REPLY", "PROVENANCE_AUTH", "EDITORIAL_INTEGRITY"],
+    "factCheckDistinctOwners": 2,
+    "standardDistinctOwners": 6,
+    "highRiskDistinctOwners": 8,
+    "highRiskSeparatedLanes": ["RISK", "FAIRNESS_REPLY", "PROVENANCE_AUTH"],
+    "modelFamilyMinimum": 2,
+    "retrievalProviderMinimumHighRisk": 2
+  },
+  "riskSemantics": {
+    "negativeRiskVerdictsStopPublication": true,
+    "hardVetoVerdict": "BLOCK",
+    "legacyObjectionMapping": {
+      "LOW": "REVISE",
+      "MEDIUM": "REVISE",
+      "HIGH": "QUARANTINE",
+      "CRITICAL": "BLOCK"
+    }
+  },
+  "disclosures": {
+    "passWithDisclosureRequiresReceipt": true,
+    "receiptBoundToPacketHash": true,
+    "receiptBoundToRenderedArtifactHash": true,
+    "publicSealedSplitRequired": true,
+    "publicReceiptMustNotExpose": [
+      "sealed evidence",
+      "confidential source identity",
+      "private reply contact channels",
+      "provider credentials",
+      "reviewer secrets",
+      "internal prompts",
+      "raw model traces",
+      "chain-of-thought",
+      "exact sensitive locations"
+    ]
+  },
+  "generatedArtifactPaths": [
+    "services/consensus/src/generated/gate-one-policy.generated.ts",
+    "services/consensus/src/generated/gate-one-rule-codes.generated.ts",
+    "packages/api-client/src/generated/gate-one-policy.generated.ts",
+    "apps/web/lib/generated/gate-one-labels.generated.ts",
+    "apps/web/public/agents/gate-one-v2.generated.md",
+    "docs/api/generated/gate-one-v2.schema.json",
+    "docs/api/generated/gate-one-v2-openapi-fragment.json"
+  ]
+}

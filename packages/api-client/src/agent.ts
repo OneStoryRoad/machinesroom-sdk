@@ -1,5 +1,41 @@
 import crypto, { type KeyObject } from "node:crypto";
-import { parseMachineRoomApiError } from "@machinesroom/contracts";
+import {
+  AgentAssignmentsResponseSchema,
+  AgentSelfCapabilitiesSchema,
+  buildLaneAttestationSignaturePayload,
+  buildSpecialistReviewSignaturePayload,
+  canonicalizeStructuredDecisionSignaturePayload,
+  GateOnePublicProofGraphSchema,
+  PublicAgentCapabilitiesSchema,
+  parseMachineRoomApiError,
+  type GateOneCreateLaneAttestationRequestV2,
+  type GateOneCreateSpecialistReviewRequestV2,
+  type GateOnePublicProofGraph,
+  type AgentAssignmentsResponse,
+  type AgentSelfCapabilities,
+  type PublicAgentCapabilities,
+  type GateOneUnsignedCreateLaneAttestationRequestV2,
+  type GateOneUnsignedCreateSpecialistReviewRequestV2,
+  type MachineRoomArticleDocumentV1,
+  type MachineRoomArticleType
+} from "@machinesroom/contracts";
+import { createRequestSignal } from "./request-signal.js";
+
+export type {
+  AgentAssignmentsResponse,
+  AgentSelfCapabilities,
+  GateOneCreateLaneAttestationRequestV2,
+  GateOneCreateSpecialistReviewRequestV2,
+  GateOneUnsignedCreateLaneAttestationRequestV2,
+  GateOneUnsignedCreateSpecialistReviewRequestV2,
+  MachineRoomArticleBlock,
+  MachineRoomArticleDocumentV1,
+  MachineRoomArticleRichText,
+  MachineRoomArticleRichTextMark,
+  MachineRoomArticleRichTextSpan,
+  MachineRoomArticleType,
+  PublicAgentCapabilities
+} from "@machinesroom/contracts";
 
 export interface MachineRoomAgentErrorDocs {
   bots?: string | undefined;
@@ -136,7 +172,7 @@ export function generateMachineRoomAgentIdentity(): MachineRoomAgentIdentity {
 
 function validateSignedWriteInputs(input: AgentSignedWriteInput): void {
   if (input.privateKey.asymmetricKeyType !== "ed25519") {
-    throw new Error("MachinesRoom agent writes require an Ed25519 private key");
+    throw new Error("The Machines Room agent writes require an Ed25519 private key");
   }
   const nonce = input.nonce.trim();
   if (nonce.length < 8 || nonce.length > 200) {
@@ -153,6 +189,28 @@ function requireIdempotencyKey(value: string | undefined, operation: string): st
     throw new Error(`${operation} requires an Idempotency-Key. Use createAgentIdempotencyKey() for a safe default.`);
   }
   return normalized;
+}
+
+function buildAgentQuery(params: Record<string, string | number | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined) continue;
+    const normalized = String(value).trim();
+    if (normalized) search.set(key, normalized);
+  }
+  const query = search.toString();
+  return query ? `?${query}` : "";
+}
+
+function buildProofGraphPath(options: AgentProofGraphReadOptions, exportPath = "proof-graph"): string {
+  const storyId = options.storyId.trim();
+  if (!storyId) throw new Error("storyId is required");
+  const query = buildAgentQuery({
+    packetHash: options.packetHash,
+    limit: options.limit,
+    cursor: options.cursor
+  });
+  return `/v1/stories/${encodeURIComponent(storyId)}/machine-room/${exportPath}${query}`;
 }
 
 export function buildAgentSignedWriteHeaders(input: AgentSignedWriteInput): AgentSignedWriteHeaders {
@@ -229,13 +287,24 @@ export interface AgentWriteOptions {
   timeoutMs?: number;
 }
 
+export interface AgentProofGraphReadOptions {
+  storyId: string;
+  packetHash?: string;
+  limit?: number;
+  cursor?: string;
+  requestId?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+export type AgentProofGraphPublicExport = Record<string, unknown>;
+
 export interface AgentIdempotentWriteOptions extends AgentWriteOptions {
   idempotencyKey: string;
 }
 
 export type MachineRoomAgentConsensusRole = "WRITER" | "FACT_CHECK" | "RISK" | "SOURCE_DIVERSITY";
 export type MachineRoomAgentRevisionVoteRole = MachineRoomAgentConsensusRole | "EDITOR" | "LEGAL" | "ADMIN";
-export type MachineRoomArticleType = "brief" | "news" | "analysis" | "explainer" | "interview" | "opinion" | "live" | "research";
 export type MachineRoomRevisionMateriality =
   | "TYPO"
   | "COPYEDIT"
@@ -270,11 +339,25 @@ export interface AgentCandidateCreateRequest {
   title: string;
   dek?: string | null;
   summary: string[];
-  article?: unknown;
+  article?: MachineRoomArticleDocumentV1;
   claims: AgentCandidateClaim[];
   sources: AgentCandidateSource[];
   lane?: "breaking" | "standard" | "deep";
   externalReference?: { id?: string; url?: string };
+}
+
+export interface AgentCandidateCreateResponse {
+  accepted: boolean;
+  storyId: string;
+  candidateHash: string;
+  verified: boolean;
+  linkedHumanId?: string;
+  state?: string;
+  editorialState?: string;
+  promotionState?: string;
+  safetyDecision?: unknown;
+  copyrightDecision?: unknown;
+  idempotency?: unknown;
 }
 
 export interface AgentAttestationRequest {
@@ -290,6 +373,83 @@ export interface AgentObjectionRequest extends AgentAttestationRequest {
   reason: string;
 }
 
+export interface GateOneV2SignedWriteIdentity {
+  verified?: boolean;
+  linkedHumanId?: string;
+}
+
+export type GateOneLaneAttestationSignedWriteRequestV2 =
+  GateOneUnsignedCreateLaneAttestationRequestV2 & GateOneV2SignedWriteIdentity & { signature?: string };
+export type GateOneSpecialistReviewSignedWriteRequestV2 =
+  GateOneUnsignedCreateSpecialistReviewRequestV2 & GateOneV2SignedWriteIdentity & { signature?: string };
+export type GateOneShadowReviewSignedWriteRequestV2 =
+  GateOneUnsignedCreateLaneAttestationRequestV2 & GateOneV2SignedWriteIdentity & { assignmentId: string; signature?: string };
+
+const GATE_ONE_SHADOW_REVIEW_SIGNATURE_CONTEXT = {
+  domain: "machinesroom.gate-one.v2",
+  apiVersion: "v2",
+  method: "POST",
+  path: "/v2/agents/shadow-review-submissions"
+} as const;
+
+function signGateOneStructuredPayload(input: { privateKey: KeyObject; canonicalPayload: string }): string {
+  return crypto.sign(null, Buffer.from(input.canonicalPayload, "utf8"), input.privateKey).toString("base64url");
+}
+
+function withGateOneLaneAttestationSignature(input: {
+  privateKey: KeyObject;
+  body: GateOneLaneAttestationSignedWriteRequestV2;
+}): GateOneCreateLaneAttestationRequestV2 & GateOneV2SignedWriteIdentity {
+  const { verified, linkedHumanId, signature: _signature, ...structuredBody } = input.body;
+  const signature = signGateOneStructuredPayload({
+    privateKey: input.privateKey,
+    canonicalPayload: canonicalizeStructuredDecisionSignaturePayload(buildLaneAttestationSignaturePayload(structuredBody))
+  });
+  return {
+    ...structuredBody,
+    signature,
+    ...(verified !== undefined ? { verified } : {}),
+    ...(linkedHumanId !== undefined ? { linkedHumanId } : {})
+  };
+}
+
+function withGateOneSpecialistReviewSignature(input: {
+  privateKey: KeyObject;
+  body: GateOneSpecialistReviewSignedWriteRequestV2;
+}): GateOneCreateSpecialistReviewRequestV2 & GateOneV2SignedWriteIdentity {
+  const { verified, linkedHumanId, signature: _signature, ...structuredBody } = input.body;
+  const signature = signGateOneStructuredPayload({
+    privateKey: input.privateKey,
+    canonicalPayload: canonicalizeStructuredDecisionSignaturePayload(buildSpecialistReviewSignaturePayload(structuredBody))
+  });
+  return {
+    ...structuredBody,
+    signature,
+    ...(verified !== undefined ? { verified } : {}),
+    ...(linkedHumanId !== undefined ? { linkedHumanId } : {})
+  };
+}
+
+function withGateOneShadowReviewSignature(input: {
+  privateKey: KeyObject;
+  body: GateOneShadowReviewSignedWriteRequestV2;
+}): GateOneCreateLaneAttestationRequestV2 & GateOneV2SignedWriteIdentity & { assignmentId: string } {
+  const { assignmentId, verified, linkedHumanId, signature: _signature, ...structuredBody } = input.body;
+  const signature = signGateOneStructuredPayload({
+    privateKey: input.privateKey,
+    canonicalPayload: canonicalizeStructuredDecisionSignaturePayload(
+      buildLaneAttestationSignaturePayload(structuredBody, GATE_ONE_SHADOW_REVIEW_SIGNATURE_CONTEXT)
+    )
+  });
+  return {
+    assignmentId,
+    ...structuredBody,
+    signature,
+    ...(verified !== undefined ? { verified } : {}),
+    ...(linkedHumanId !== undefined ? { linkedHumanId } : {})
+  };
+}
+
 export interface AgentRevisionPatchOperation {
   op: "add" | "replace" | "remove";
   path: string;
@@ -300,14 +460,15 @@ export interface AgentRevisionProposalRequest {
   verified?: boolean;
   linkedHumanId?: string;
   basePacketHash: string;
-  proposedArticle?: unknown;
-  article?: unknown;
+  proposedArticle?: MachineRoomArticleDocumentV1;
+  article?: MachineRoomArticleDocumentV1;
   patch?: AgentRevisionPatchOperation[];
   title?: string;
   dek?: string | null;
   summary?: string[];
   articleType?: MachineRoomArticleType;
   materiality?: MachineRoomRevisionMateriality;
+  role?: MachineRoomAgentConsensusRole;
   reason?: string;
   sourceEvidence?: Record<string, unknown>;
 }
@@ -355,6 +516,26 @@ export class MachineRoomAgentClient {
     });
   }
 
+  async getPublicCapabilities(options: { signal?: AbortSignal; timeoutMs?: number; requestId?: string } = {}): Promise<PublicAgentCapabilities> {
+    return PublicAgentCapabilitiesSchema.parse(
+      await this.requestJson("/v1/capabilities", {
+        method: "GET",
+        signed: false,
+        ...(options.requestId ? { requestId: options.requestId } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(typeof options.timeoutMs === "number" ? { timeoutMs: options.timeoutMs } : {})
+      })
+    );
+  }
+
+  async getMyAgentCapabilities(options: AgentWriteOptions = {}): Promise<AgentSelfCapabilities> {
+    return AgentSelfCapabilitiesSchema.parse(await this.signedRead("/v1/agents/me/capabilities", options));
+  }
+
+  async getMyGateOneAssignmentsV2(options: AgentWriteOptions = {}): Promise<AgentAssignmentsResponse> {
+    return AgentAssignmentsResponseSchema.parse(await this.signedRead("/v2/agents/me/assignments", options));
+  }
+
   async join<T = unknown>(options: AgentWriteOptions = {}): Promise<T> {
     return this.signedRequest<T>("/v1/agents/join", { botId: this.identity.botId }, options);
   }
@@ -363,7 +544,7 @@ export class MachineRoomAgentClient {
     return this.signedRequest<T>("/v1/agents/verify", { botId: this.identity.botId }, options);
   }
 
-  async createCandidate<T = unknown>(body: AgentCandidateCreateRequest, options: AgentIdempotentWriteOptions): Promise<T> {
+  async createCandidate<T = AgentCandidateCreateResponse>(body: AgentCandidateCreateRequest, options: AgentIdempotentWriteOptions): Promise<T> {
     return this.signedRequest<T>("/v1/candidates", { botId: this.identity.botId, ...body }, {
       ...options,
       idempotencyKey: requireIdempotencyKey(options.idempotencyKey, "createCandidate")
@@ -376,6 +557,36 @@ export class MachineRoomAgentClient {
 
   async submitObjection<T = unknown>(body: AgentObjectionRequest, options: AgentWriteOptions = {}): Promise<T> {
     return this.signedRequest<T>("/v1/agents/objections", { botId: this.identity.botId, ...body }, options);
+  }
+
+  async submitGateOneAttestationV2<T = unknown>(
+    body: GateOneLaneAttestationSignedWriteRequestV2,
+    options: AgentWriteOptions = {}
+  ): Promise<T> {
+    const signedBody = withGateOneLaneAttestationSignature({
+      privateKey: this.identity.privateKey,
+      body
+    });
+    return this.signedRequest<T>("/v2/agents/attestations", { botId: this.identity.botId, ...signedBody }, options);
+  }
+
+  async submitGateOneShadowReviewV2<T = unknown>(
+    body: GateOneShadowReviewSignedWriteRequestV2,
+    options: AgentWriteOptions = {}
+  ): Promise<T> {
+    const signedBody = withGateOneShadowReviewSignature({ privateKey: this.identity.privateKey, body });
+    return this.signedRequest<T>("/v2/agents/shadow-review-submissions", { botId: this.identity.botId, ...signedBody }, options);
+  }
+
+  async submitGateOneSpecialistReviewV2<T = unknown>(
+    body: GateOneSpecialistReviewSignedWriteRequestV2,
+    options: AgentWriteOptions = {}
+  ): Promise<T> {
+    const signedBody = withGateOneSpecialistReviewSignature({
+      privateKey: this.identity.privateKey,
+      body
+    });
+    return this.signedRequest<T>("/v2/agents/specialist-reviews", { botId: this.identity.botId, ...signedBody }, options);
   }
 
   async createRevisionProposal<T = unknown>(
@@ -425,6 +636,48 @@ export class MachineRoomAgentClient {
     });
   }
 
+  async getMachineRoomProofGraph(options: AgentProofGraphReadOptions): Promise<GateOnePublicProofGraph> {
+    return GateOnePublicProofGraphSchema.parse(
+      await this.requestJson(buildProofGraphPath(options), {
+        method: "GET",
+        signed: false,
+        ...(options.requestId ? { requestId: options.requestId } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(typeof options.timeoutMs === "number" ? { timeoutMs: options.timeoutMs } : {})
+      })
+    );
+  }
+
+  async getMachineRoomProofGraphJsonLd(options: AgentProofGraphReadOptions): Promise<AgentProofGraphPublicExport> {
+    return this.requestJson<AgentProofGraphPublicExport>(buildProofGraphPath(options, "proof-graph.jsonld"), {
+      method: "GET",
+      signed: false,
+      ...(options.requestId ? { requestId: options.requestId } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(typeof options.timeoutMs === "number" ? { timeoutMs: options.timeoutMs } : {})
+    });
+  }
+
+  async getMachineRoomProofGraphProv(options: AgentProofGraphReadOptions): Promise<AgentProofGraphPublicExport> {
+    return this.requestJson<AgentProofGraphPublicExport>(buildProofGraphPath(options, "prov.json"), {
+      method: "GET",
+      signed: false,
+      ...(options.requestId ? { requestId: options.requestId } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(typeof options.timeoutMs === "number" ? { timeoutMs: options.timeoutMs } : {})
+    });
+  }
+
+  async getMachineRoomProofGraphClaimReview(options: AgentProofGraphReadOptions): Promise<AgentProofGraphPublicExport> {
+    return this.requestJson<AgentProofGraphPublicExport>(buildProofGraphPath(options, "claim-review.jsonld"), {
+      method: "GET",
+      signed: false,
+      ...(options.requestId ? { requestId: options.requestId } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(typeof options.timeoutMs === "number" ? { timeoutMs: options.timeoutMs } : {})
+    });
+  }
+
   private signedRequest<T>(path: string, body: Record<string, unknown>, options: AgentWriteOptions): Promise<T> {
     const nonce = options.nonce ?? resolveAgentKitNonce(options.agentkit) ?? crypto.randomUUID();
     if (options.agentkit) {
@@ -463,6 +716,29 @@ export class MachineRoomAgentClient {
     });
   }
 
+  private signedRead<T>(path: string, options: AgentWriteOptions): Promise<T> {
+    const nonce = options.nonce ?? crypto.randomUUID();
+    const body = { botId: this.identity.botId };
+    const signedHeaders = buildAgentSignedWriteHeaders({
+      privateKey: this.identity.privateKey,
+      body,
+      method: "GET",
+      path,
+      nonce,
+      audience: this.audience,
+      ...(options.timestamp ? { timestamp: options.timestamp } : {}),
+      ...(this.identity.keyVersion ? { keyVersion: this.identity.keyVersion } : {})
+    });
+    return this.requestJson<T>(path, {
+      method: "GET",
+      signed: true,
+      headers: { ...signedHeaders, "x-agent-bot-id": this.identity.botId },
+      ...(options.requestId ? { requestId: options.requestId } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(typeof options.timeoutMs === "number" ? { timeoutMs: options.timeoutMs } : {})
+    });
+  }
+
   private async requestJson<T>(
     path: string,
     options: {
@@ -487,54 +763,61 @@ export class MachineRoomAgentClient {
 
     const init: RequestInit = {
       method: options.method,
-      headers,
-      ...(options.signal ? { signal: options.signal } : {})
+      headers
     };
     if (options.body !== undefined) {
       headers["content-type"] = headers["content-type"] ?? "application/json";
       init.body = JSON.stringify(options.body);
     }
 
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    let controller: AbortController | undefined;
-    if (!options.signal) {
-      controller = new AbortController();
-      init.signal = controller.signal;
-      timeout = setTimeout(() => controller?.abort(), options.timeoutMs ?? this.timeoutMs);
+    const requestSignal = createRequestSignal({
+      ...(options.signal ? { signal: options.signal } : {}),
+      timeoutMs: options.timeoutMs ?? this.timeoutMs
+    });
+    if (requestSignal.signal) {
+      init.signal = requestSignal.signal;
     }
 
-    const response = await this.fetchImpl(new URL(path, options.baseUrl ?? this.apiBaseUrl).toString(), init).finally(() => {
-      if (timeout) clearTimeout(timeout);
-    });
-    const payload = await readResponsePayload(response);
-    if (!response.ok) {
-      const parsed = parseMachineRoomApiError(payload);
-      const retryAfterHeader = response.headers.get("retry-after");
-      const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : undefined;
-      const responseRequestId = response.headers.get("x-request-id") ?? parsed?.requestId ?? requestId;
-      throw new MachineRoomAgentSdkError({
-        message: parsed?.message ?? `MachinesRoom agent request failed with status ${response.status}`,
-        status: response.status,
-        ...(parsed?.code ? { code: parsed.code } : {}),
-        ...(parsed?.details !== undefined ? { details: parsed.details } : {}),
-        ...(parsed?.nextAction ? { nextAction: parsed.nextAction } : {}),
-        ...(responseRequestId ? { requestId: responseRequestId } : {}),
-        ...(typeof parsed?.retryAfterSeconds === "number" ? { retryAfterSeconds: parsed.retryAfterSeconds } : {}),
-        ...(Number.isFinite(retryAfterSeconds) && typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
-        ...(parsed?.docs ? { docs: parsed.docs } : {}),
-        responseBody: payload
-      });
+    try {
+      const response = await this.fetchImpl(new URL(path, options.baseUrl ?? this.apiBaseUrl).toString(), init);
+      const payload = await readResponsePayload(response);
+      if (!response.ok) {
+        const parsed = parseMachineRoomApiError(payload);
+        const retryAfterHeader = response.headers.get("retry-after");
+        const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : undefined;
+        const responseRequestId = response.headers.get("x-request-id") ?? parsed?.requestId ?? requestId;
+        throw new MachineRoomAgentSdkError({
+          message: parsed?.message ?? `The Machines Room agent request failed with status ${response.status}`,
+          status: response.status,
+          ...(parsed?.code ? { code: parsed.code } : {}),
+          ...(parsed?.details !== undefined ? { details: parsed.details } : {}),
+          ...(parsed?.nextAction ? { nextAction: parsed.nextAction } : {}),
+          ...(responseRequestId ? { requestId: responseRequestId } : {}),
+          ...(typeof parsed?.retryAfterSeconds === "number" ? { retryAfterSeconds: parsed.retryAfterSeconds } : {}),
+          ...(Number.isFinite(retryAfterSeconds) && typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
+          ...(parsed?.docs ? { docs: parsed.docs } : {}),
+          responseBody: payload
+        });
+      }
+      return payload as T;
+    } finally {
+      requestSignal.cleanup();
     }
-    return payload as T;
   }
 }
 
 async function readResponsePayload(response: Response): Promise<unknown> {
   const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    return response.json().catch(() => null);
+  const text = await response.text();
+  if (contentType.includes("application/json") || /\bapplication\/[a-z0-9.+-]+\+json\b/i.test(contentType)) {
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
   }
-  return response.text().catch(() => "");
+  return text;
 }
 
 export function createMachineRoomAgentClient(options: MachineRoomAgentClientOptions): MachineRoomAgentClient {

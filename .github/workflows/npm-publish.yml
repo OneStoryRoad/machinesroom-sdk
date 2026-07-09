@@ -8,35 +8,64 @@ on:
         required: true
         type: string
       dry_run:
-        description: "Run npm publish --dry-run without uploading packages"
+        description: "Validate without uploading packages"
         required: true
         default: true
         type: boolean
+      publish_mode:
+        description: "Trusted publishing or one-time bootstrap token mode"
+        required: true
+        default: trusted
+        type: choice
+        options:
+          - trusted
+          - bootstrap_token
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: npm-publish-sdk
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: publish SDK packages
+  preflight:
+    name: verify release dispatch
     runs-on: ubuntu-latest
-    environment: npm-production
-    if: github.ref == 'refs/heads/main'
     steps:
-      - name: Verify release commit
+      - name: Verify main branch dispatch
         run: |
           set -euo pipefail
-          if [ "${{ inputs.expected_sha }}" != "${{ github.sha }}" ]; then
-            echo "::error::Expected ${{ inputs.expected_sha }} but workflow is running on ${{ github.sha }}"
+          if [ "${GITHUB_REF:-}" != "refs/heads/main" ]; then
+            echo "::error::Publish SDK to npm must be dispatched from refs/heads/main; got ${GITHUB_REF:-<missing>}"
             exit 1
           fi
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Verify release commit
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          ACTUAL_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::expected_sha must be a 40-character lowercase git commit SHA"
+            exit 1
+          fi
+          if [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+            echo "::error::Expected $EXPECTED_SHA but workflow is running on $ACTUAL_SHA"
+            exit 1
+          fi
+
+  publish:
+    name: publish SDK packages
+    runs-on: ubuntu-latest
+    needs: preflight
+    environment: npm-production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
         with:
@@ -70,6 +99,17 @@ jobs:
             throw new Error(`npm trusted publishing requires npm 11.5.1 or newer; got ${version}`);
           }
           NODE
+
+      - name: Verify bootstrap token secret
+        if: ${{ inputs.publish_mode == 'bootstrap_token' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN || secrets.TEMPNPM }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_BOOTSTRAP_TOKEN is required in the npm-production environment for bootstrap_token mode. The temporary TEMPNPM compatibility secret is also accepted during first publish bootstrap."
+            exit 1
+          fi
 
       - name: Install dependencies
         run: pnpm ci:install
@@ -139,8 +179,19 @@ jobs:
           if-no-files-found: error
 
       - name: Publish SDK packages with trusted publishing
+        if: ${{ inputs.publish_mode == 'trusted' }}
         env:
           DRY_RUN: ${{ inputs.dry_run }}
+          CONTRACTS_TGZ: ${{ steps.pack.outputs.contracts_tgz }}
+          API_CLIENT_TGZ: ${{ steps.pack.outputs.api_client_tgz }}
+        run: |
+          bash scripts/ops/publish-sdk-packages.sh
+
+      - name: Publish SDK packages with bootstrap token
+        if: ${{ inputs.publish_mode == 'bootstrap_token' }}
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN || secrets.TEMPNPM }}
           CONTRACTS_TGZ: ${{ steps.pack.outputs.contracts_tgz }}
           API_CLIENT_TGZ: ${{ steps.pack.outputs.api_client_tgz }}
         run: |

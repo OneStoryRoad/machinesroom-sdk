@@ -69,6 +69,32 @@ test("reward deploy plan defaults to dry-run and never requires a deployer key",
     validEnv.REWARD_CLAIMS_ADMIN_ADDRESS.toLowerCase()
   ]);
   assert.match(plan.bytecodeHash, /^0x[0-9a-f]{64}$/);
+  assert.equal(plan.rpcUrl, `${validEnv.REWARD_CLAIMS_RPC_URL}/`);
+  assert.equal(plan.rpcUrlRedacted, "http://[redacted]");
+});
+
+test("reward deploy plan redacts RPC URL credentials from JSON output", () => {
+  const secretRpcUrl = "https://user:pass@alchemy-project-key.example.invalid/v2/path-secret?api_key=query-secret#fragment-secret";
+  const plan = buildRewardMerkleDistributorDeployPlan({
+    artifact: artifact(),
+    env: {
+      ...validEnv,
+      REWARD_CLAIMS_RPC_URL: secretRpcUrl
+    }
+  });
+  const serialized = JSON.stringify({ plan });
+
+  assert.equal(plan.rpcUrl, secretRpcUrl);
+  assert.equal(plan.rpcUrlRedacted, "https://[redacted]");
+  assert.equal(Object.prototype.propertyIsEnumerable.call(plan, "rpcUrl"), false);
+  assert.equal(serialized.includes(secretRpcUrl), false);
+  assert.equal(serialized.includes("user"), false);
+  assert.equal(serialized.includes("pass"), false);
+  assert.equal(serialized.includes("alchemy-project-key"), false);
+  assert.equal(serialized.includes("path-secret"), false);
+  assert.equal(serialized.includes("query-secret"), false);
+  assert.equal(serialized.includes("fragment-secret"), false);
+  assert.equal(serialized.includes("https://[redacted]"), true);
 });
 
 test("reward deploy plan accepts eip155 chain IDs", () => {

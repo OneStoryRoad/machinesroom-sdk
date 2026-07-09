@@ -3,6 +3,11 @@ import {
   FeedResponseSchema,
   HomeResponseSchema,
   MachineRoomResponseSchema,
+  PublishComputeRequestSchema,
+  PublishComputeResponseSchema,
+  GateOneV2PreflightRunRequestSchema,
+  GateOneV2PreflightRunResponseSchema,
+  GateOnePublicProofGraphSchema,
   StoryAssistantOrientationResponseSchema,
   StoryDetailSchema,
   StoryVersionsResponseSchema,
@@ -56,6 +61,12 @@ import {
   type HomeResponse,
   type IdempotencyResult,
   type MachineRoomResponse,
+  type MachineRoomArticleDocumentV1,
+  type PublishComputeRequest,
+  type PublishComputeResponse,
+  type GateOneV2PreflightRunRequest,
+  type GateOneV2PreflightRunResponse,
+  type GateOnePublicProofGraph,
   type StoryAssistantOrientationResponse,
   type StoryDetail,
   type StoryVersionsResponse,
@@ -119,6 +130,7 @@ import {
   type V2WorkspaceServiceAccountsResponse,
   parseMachineRoomApiError
 } from "@machinesroom/contracts";
+import { createRequestSignal } from "./request-signal.js";
 
 export type {
   AssistantOrientationAction,
@@ -127,7 +139,19 @@ export type {
   AssistantOrientationModuleItem,
   AssistantOrientationResponse,
   AssistantOrientationStory,
+  MachineRoomArticleBlock,
+  MachineRoomArticleDocumentV1,
+  MachineRoomArticleRichText,
+  MachineRoomArticleRichTextMark,
+  MachineRoomArticleRichTextSpan,
+  MachineRoomArticleType,
+  PublishComputeRequest,
+  PublishComputeResponse,
+  GateOneV2PreflightRunRequest,
+  GateOneV2PreflightRunResponse,
+  GateOnePublicProofGraph,
   StoryAssistantOrientationResponse,
+  StoryArticleDocument,
   V2ActorSession,
   V2AgentData,
   V2AgentInventoryItem,
@@ -263,6 +287,7 @@ export interface MachineRoomApiClientOptions {
   fetch?: typeof fetch;
   headers?: Record<string, string>;
   requestIdFactory?: () => string;
+  timeoutMs?: number;
 }
 
 export interface ApiRequestOptions {
@@ -272,6 +297,8 @@ export interface ApiRequestOptions {
   idempotencyKey?: string;
   requestId?: string;
   cache?: RequestInit["cache"];
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export type AgentArticleType = "brief" | "news" | "analysis" | "explainer" | "interview" | "opinion" | "live" | "research";
@@ -285,6 +312,8 @@ export type AgentStoryRevisionProposalMateriality =
   | "BREAKING_UPDATE"
   | "FORMAT_ONLY"
   | "STRUCTURAL";
+
+export type AgentConsensusRewardRole = "WRITER" | "FACT_CHECK" | "RISK" | "SOURCE_DIVERSITY";
 
 export interface AgentSignedWriteRequestOptions {
   headers: Record<string, string>;
@@ -303,14 +332,15 @@ export interface AgentStoryRevisionProposalRequest {
   verified?: boolean;
   linkedHumanId?: string;
   basePacketHash: string;
-  proposedArticle?: unknown;
-  article?: unknown;
+  proposedArticle?: MachineRoomArticleDocumentV1;
+  article?: MachineRoomArticleDocumentV1;
   patch?: AgentStoryRevisionPatchOperation[];
   title?: string;
   dek?: string | null;
   summary?: string[];
   articleType?: AgentArticleType;
   materiality?: AgentStoryRevisionProposalMateriality;
+  role?: AgentConsensusRewardRole;
   reason?: string;
   sourceEvidence?: Record<string, unknown>;
 }
@@ -389,23 +419,180 @@ export interface V2AuditEventsFilterRequestOptions {
   createdAtTo?: string;
 }
 
-export interface V2StoryReadRequestOptions extends V2ProtectedActorReadRequestOptions {
+export interface V2StoryReadRequestOptions extends V2ProtectedReadRequestOptions {
   storyId: string;
 }
 
-export interface V2StoriesRequestOptions extends V2ProtectedActorReadRequestOptions {
+export interface V2StoriesRequestOptions extends V2ProtectedReadRequestOptions {
   room?: string;
   language?: SupportedLanguage;
   cursor?: string;
   mode?: "trending" | "graduated" | "developing" | "recent";
 }
 
-export interface V2AgentListRequestOptions extends V2ProtectedActorReadRequestOptions {
+export interface V2AgentListRequestOptions extends V2ProtectedReadRequestOptions {
   limit?: number;
 }
 
-export interface V2AgentRequestOptions extends V2ProtectedActorReadRequestOptions {
+export interface V2AgentRequestOptions extends V2ProtectedReadRequestOptions {
   botId: string;
+}
+
+export interface V2OperationsRequestOptions {
+  operationsToken: string;
+  requestId?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+export interface PublishComputeRequestOptions extends V2OperationsRequestOptions {
+  candidateHash: string;
+  forceRescan?: PublishComputeRequest["forceRescan"];
+  lane?: PublishComputeRequest["lane"];
+}
+
+export interface GateOneV2PreflightRunOptions extends V2OperationsRequestOptions {
+  storyId: string;
+  packet: GateOneV2PreflightRunRequest["packet"];
+  promoteToCurrent?: GateOneV2PreflightRunRequest["promoteToCurrent"];
+}
+
+export type GateOneV2ConsensusSafetyDecision = "ALLOW" | "BLOCK" | "QUARANTINE" | "UNAVAILABLE";
+export type GateOneV2ConsensusMode = "SHADOW";
+export type GateOneV2ConsensusPublicationEffect = "NONE";
+export type GateOneV2ConsensusTerminalStatus = "WOULD_ALLOW" | "PENDING" | "BLOCKED";
+export type GateOneV2ConsensusTerminalStep =
+  | "PACKET_CURRENTNESS"
+  | "POLICY_VERSION"
+  | "PREFLIGHTS"
+  | "SPECIALIST_REQUIREMENTS"
+  | "REVIEW_ELIGIBILITY"
+  | "DISCLOSURE_RECEIPTS"
+  | "INDEPENDENCE"
+  | "HARD_VERDICTS"
+  | "ROLE_COUNTS"
+  | "OWNER_DIVERSITY"
+  | "TRUST_WEIGHTS"
+  | "HOLDS"
+  | "SAFETY_GATE"
+  | "WOULD_ALLOW";
+
+export interface GateOneV2DisclosureReceiptVerifyRequestOptions extends V2OperationsRequestOptions {
+  storyId: string;
+  packetHash?: string;
+  requirementId: string;
+  renderedArtifactHash: string;
+  renderTarget: string;
+  renderedTextHash: string;
+  rendererVersion: string;
+  verifiedAt?: string;
+}
+
+export interface GateOneV2DisclosureRenderReceipt {
+  id: string;
+  storyId: string;
+  packetId: string;
+  packetHash: string;
+  requirementId: string;
+  renderedArtifactHash: string;
+  renderTarget: string;
+  renderedTextHash: string;
+  rendererVersion: string;
+  verifiedAt: string;
+  invalidatedAt?: string | null;
+  invalidationReason?: string | null;
+}
+
+export interface GateOneV2DisclosureReceiptVerifyResponse {
+  storyId: string;
+  packetId: string;
+  packetHash: string;
+  publicationEffect: GateOneV2ConsensusPublicationEffect;
+  receipt: GateOneV2DisclosureRenderReceipt;
+}
+
+export interface GateOneV2ConsensusEvaluateRequestOptions extends V2OperationsRequestOptions {
+  storyId: string;
+  packetHash?: string;
+  safetyDecision?: GateOneV2ConsensusSafetyDecision;
+  activeLegalHold?: boolean;
+  killSwitchActive?: boolean;
+  evaluatedAt?: string;
+}
+
+export interface GateOneProofGraphPublicRequestOptions extends ApiRequestOptions {
+  storyId: string;
+  packetHash?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export type GateOneProofGraphPublicExport = Record<string, unknown>;
+
+export interface GateOneProofGraphRebuildRequestOptions extends V2OperationsRequestOptions {
+  storyId: string;
+  packetHash?: string;
+}
+
+export interface GateOneProofGraphInternalReadOptions extends V2OperationsRequestOptions {
+  storyId?: string;
+  id?: string;
+  packetHash?: string;
+  fromPacketHash?: string;
+  toPacketHash?: string;
+  cursor?: string;
+  includePrivate?: boolean;
+  includeSealed?: boolean;
+  includeInvalidated?: boolean;
+  limit?: number;
+}
+
+export interface GateOneV2ConsensusEvaluation {
+  id: string;
+  storyId: string;
+  packetId: string;
+  packetHash: string;
+  policyVersion: string;
+  profile: string;
+  approved: boolean;
+  blocked: boolean;
+  targetState: string;
+  reasonCodes: string[];
+  selectedReviewIds: string[];
+  tracePublic: Record<string, unknown>;
+  traceSealedRef?: string | null;
+  safetyDecision?: GateOneV2ConsensusSafetyDecision;
+  activeLegalHold: boolean;
+  evaluatedAt: string;
+  invalidatedAt?: string | null;
+  invalidationReason?: string | null;
+}
+
+export interface GateOneV2ConsensusTrace extends Record<string, unknown> {
+  trustWeightPolicyApplied: boolean;
+}
+
+export interface GateOneV2ConsensusOutcome {
+  schemaVersion: "2.0";
+  mode: GateOneV2ConsensusMode;
+  publicationEffect: GateOneV2ConsensusPublicationEffect;
+  terminalStatus: GateOneV2ConsensusTerminalStatus;
+  terminalStep: GateOneV2ConsensusTerminalStep;
+  wouldAllowPublication: boolean;
+  reasons: Array<Record<string, unknown>>;
+  trace: GateOneV2ConsensusTrace;
+  deterministicTraceHash: string;
+  implementationVersion: string;
+}
+
+export interface GateOneV2ConsensusEvaluateResponse {
+  storyId: string;
+  packetId: string;
+  packetHash: string;
+  mode: GateOneV2ConsensusMode;
+  publicationEffect: GateOneV2ConsensusPublicationEffect;
+  evaluation: GateOneV2ConsensusEvaluation;
+  outcome: GateOneV2ConsensusOutcome;
 }
 
 export interface V2PendingWorkspaceMembershipInviteRequestOptions extends V2ProtectedReadRequestOptions {
@@ -670,10 +857,17 @@ function buildV2AuditEventsQuery(
 
 async function readResponsePayload(response: Response): Promise<unknown> {
   const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    return response.json().catch(() => null);
+  const mediaType = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
+  const text = await response.text();
+  if (mediaType === "application/json" || mediaType.endsWith("+json")) {
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
   }
-  return response.text().catch(() => "");
+  return text;
 }
 
 function resolveRequestId(input: {
@@ -700,7 +894,19 @@ function buildV2AuthHeaders(options: { sessionToken?: string; apiKey?: string })
   return buildV2SessionHeaders(sessionToken);
 }
 
-const V2_AUTH_HEADER_NAMES = new Set(["authorization", "x-api-key", "x-user-session-token"]);
+function buildV2OperationsHeaders(options: { operationsToken: string }): Record<string, string> {
+  const operationsToken = options.operationsToken.trim();
+  if (!operationsToken) {
+    throw new Error("operationsToken is required");
+  }
+  return { "x-operations-token": operationsToken };
+}
+
+const V2_AUTH_HEADER_NAMES = new Set(["authorization", "x-api-key", "x-user-session-token", "x-operations-token"]);
+
+function hasExplicitV2AuthHeader(headers: Record<string, string> | undefined): boolean {
+  return Object.keys(headers ?? {}).some((name) => V2_AUTH_HEADER_NAMES.has(name.toLowerCase()));
+}
 
 function stripV2AuthHeaders(headers: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
@@ -713,6 +919,7 @@ export class MachineRoomApiClient {
   private readonly fetchImpl: typeof fetch;
   private readonly headers: Record<string, string>;
   private readonly requestIdFactory: (() => string) | undefined;
+  private readonly timeoutMs: number | undefined;
 
   constructor(options: MachineRoomApiClientOptions) {
     this.baseUrl = options.baseUrl;
@@ -722,12 +929,15 @@ export class MachineRoomApiClient {
       ...(options.headers ?? {})
     };
     this.requestIdFactory = options.requestIdFactory;
+    this.timeoutMs = options.timeoutMs;
   }
 
   async requestJson<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
     const method = options.method ?? "GET";
     const defaultHeaders =
-      path.startsWith("/v2/") && options.headers ? stripV2AuthHeaders(this.headers) : this.headers;
+      options.headers && (path.startsWith("/v2/") || hasExplicitV2AuthHeader(options.headers))
+        ? stripV2AuthHeaders(this.headers)
+        : this.headers;
     const headers: Record<string, string> = {
       ...defaultHeaders,
       ...(options.headers ?? {})
@@ -750,27 +960,40 @@ export class MachineRoomApiClient {
       init.body = JSON.stringify(options.body);
     }
 
-    const response = await this.fetchImpl(joinUrl(this.baseUrl, path), init);
-    const payload = await readResponsePayload(response);
-    if (!response.ok) {
-      const apiError = parseMachineRoomApiError(payload);
-      const retryAfterHeader = response.headers.get("retry-after");
-      const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : undefined;
-      const responseRequestId = response.headers.get("x-request-id") ?? apiError?.requestId ?? requestId;
-      throw new MachineRoomApiClientError({
-        message: apiError?.message ?? `MachineRoom API request failed with status ${response.status}`,
-        status: response.status,
-        ...(apiError?.code ? { code: apiError.code } : {}),
-        ...(responseRequestId ? { requestId: responseRequestId } : {}),
-        ...(apiError?.details !== undefined ? { details: apiError.details } : {}),
-        ...(apiError?.nextAction ? { nextAction: apiError.nextAction } : {}),
-        ...(typeof apiError?.retryAfterSeconds === "number" ? { retryAfterSeconds: apiError.retryAfterSeconds } : {}),
-        ...(Number.isFinite(retryAfterSeconds) && typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
-        ...(apiError?.docs ? { docs: apiError.docs } : {}),
-        responseBody: payload
-      });
+    const requestTimeoutMs = options.timeoutMs ?? this.timeoutMs;
+    const requestSignal = createRequestSignal({
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(typeof requestTimeoutMs === "number" ? { timeoutMs: requestTimeoutMs } : {})
+    });
+    if (requestSignal.signal) {
+      init.signal = requestSignal.signal;
     }
-    return payload as T;
+
+    try {
+      const response = await this.fetchImpl(joinUrl(this.baseUrl, path), init);
+      const payload = await readResponsePayload(response);
+      if (!response.ok) {
+        const apiError = parseMachineRoomApiError(payload);
+        const retryAfterHeader = response.headers.get("retry-after");
+        const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : undefined;
+        const responseRequestId = response.headers.get("x-request-id") ?? apiError?.requestId ?? requestId;
+        throw new MachineRoomApiClientError({
+          message: apiError?.message ?? `MachineRoom API request failed with status ${response.status}`,
+          status: response.status,
+          ...(apiError?.code ? { code: apiError.code } : {}),
+          ...(responseRequestId ? { requestId: responseRequestId } : {}),
+          ...(apiError?.details !== undefined ? { details: apiError.details } : {}),
+          ...(apiError?.nextAction ? { nextAction: apiError.nextAction } : {}),
+          ...(typeof apiError?.retryAfterSeconds === "number" ? { retryAfterSeconds: apiError.retryAfterSeconds } : {}),
+          ...(Number.isFinite(retryAfterSeconds) && typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
+          ...(apiError?.docs ? { docs: apiError.docs } : {}),
+          responseBody: payload
+        });
+      }
+      return payload as T;
+    } finally {
+      requestSignal.cleanup();
+    }
   }
 
   async getHome(language?: SupportedLanguage): Promise<HomeResponse> {
@@ -796,9 +1019,13 @@ export class MachineRoomApiClient {
     return AssistantOrientationResponseSchema.parse(await this.requestJson(`/v1/assistant/orientation${query}`));
   }
 
-  async getStoryAssistantOrientation(storyId: string): Promise<StoryAssistantOrientationResponse> {
+  async getStoryAssistantOrientation(
+    storyId: string,
+    language?: SupportedLanguage
+  ): Promise<StoryAssistantOrientationResponse> {
+    const query = buildQuery({ ...(language ? { lang: language } : {}) });
     return StoryAssistantOrientationResponseSchema.parse(
-      await this.requestJson(`/v1/stories/${encodeURIComponent(storyId)}/assistant-orientation`)
+      await this.requestJson(`/v1/stories/${encodeURIComponent(storyId)}/assistant-orientation${query}`)
     );
   }
 
@@ -808,9 +1035,147 @@ export class MachineRoomApiClient {
     );
   }
 
-  async getMachineRoom(storyId: string): Promise<MachineRoomResponse> {
+  async getMachineRoom(storyId: string, language?: SupportedLanguage, options?: { packetHash?: string }): Promise<MachineRoomResponse> {
+    const query = buildQuery({ ...(language ? { lang: language } : {}), ...(options?.packetHash ? { packetHash: options.packetHash } : {}) });
     return MachineRoomResponseSchema.parse(
-      await this.requestJson(`/v1/stories/${encodeURIComponent(storyId)}/machine-room`)
+      await this.requestJson(`/v1/stories/${encodeURIComponent(storyId)}/machine-room${query}`)
+    );
+  }
+
+  async getMachineRoomProofGraph(options: GateOneProofGraphPublicRequestOptions): Promise<GateOnePublicProofGraph> {
+    const storyId = options.storyId.trim();
+    const packetHash = options.packetHash?.trim();
+    if (!storyId) {
+      throw new Error("storyId is required");
+    }
+    const query = buildQuery({
+      ...(packetHash ? { packetHash } : {}),
+      ...(options.limit !== undefined ? { limit: String(options.limit) } : {}),
+      cursor: options.cursor
+    });
+    return GateOnePublicProofGraphSchema.parse(
+      await this.requestJson(`/v1/stories/${encodeURIComponent(storyId)}/machine-room/proof-graph${query}`, {
+        cache: "no-store",
+        ...(options.requestId ? { requestId: options.requestId } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {})
+      })
+    );
+  }
+
+  async getMachineRoomProofGraphJsonLd(
+    options: GateOneProofGraphPublicRequestOptions
+  ): Promise<GateOneProofGraphPublicExport> {
+    const storyId = options.storyId.trim();
+    const packetHash = options.packetHash?.trim();
+    if (!storyId) {
+      throw new Error("storyId is required");
+    }
+    const query = buildQuery({
+      ...(packetHash ? { packetHash } : {}),
+      ...(options.limit !== undefined ? { limit: String(options.limit) } : {}),
+      cursor: options.cursor
+    });
+    return this.requestJson<GateOneProofGraphPublicExport>(
+      `/v1/stories/${encodeURIComponent(storyId)}/machine-room/proof-graph.jsonld${query}`,
+      {
+        cache: "no-store",
+        ...(options.requestId ? { requestId: options.requestId } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {})
+      }
+    );
+  }
+
+  async getMachineRoomProofGraphProv(
+    options: GateOneProofGraphPublicRequestOptions
+  ): Promise<GateOneProofGraphPublicExport> {
+    const storyId = options.storyId.trim();
+    const packetHash = options.packetHash?.trim();
+    if (!storyId) {
+      throw new Error("storyId is required");
+    }
+    const query = buildQuery({
+      ...(packetHash ? { packetHash } : {}),
+      ...(options.limit !== undefined ? { limit: String(options.limit) } : {}),
+      cursor: options.cursor
+    });
+    return this.requestJson<GateOneProofGraphPublicExport>(
+      `/v1/stories/${encodeURIComponent(storyId)}/machine-room/prov.json${query}`,
+      {
+        cache: "no-store",
+        ...(options.requestId ? { requestId: options.requestId } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {})
+      }
+    );
+  }
+
+  async getMachineRoomProofGraphClaimReview(
+    options: GateOneProofGraphPublicRequestOptions
+  ): Promise<GateOneProofGraphPublicExport> {
+    const storyId = options.storyId.trim();
+    const packetHash = options.packetHash?.trim();
+    if (!storyId) {
+      throw new Error("storyId is required");
+    }
+    const query = buildQuery({
+      ...(packetHash ? { packetHash } : {}),
+      ...(options.limit !== undefined ? { limit: String(options.limit) } : {}),
+      cursor: options.cursor
+    });
+    return this.requestJson<GateOneProofGraphPublicExport>(
+      `/v1/stories/${encodeURIComponent(storyId)}/machine-room/claim-review.jsonld${query}`,
+      {
+        cache: "no-store",
+        ...(options.requestId ? { requestId: options.requestId } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {})
+      }
+    );
+  }
+
+  async computePublishReadiness(options: PublishComputeRequestOptions): Promise<PublishComputeResponse> {
+    const candidateHash = options.candidateHash.trim();
+    if (!/^[a-f0-9]{64}$/i.test(candidateHash)) {
+      throw new Error("candidateHash must be a sha256 hex digest");
+    }
+    const body = PublishComputeRequestSchema.parse({
+      ...(options.forceRescan !== undefined ? { forceRescan: options.forceRescan } : {}),
+      ...(options.lane !== undefined ? { lane: options.lane } : {})
+    });
+    return PublishComputeResponseSchema.parse(
+      await this.requestJson(`/v1/publish/${encodeURIComponent(candidateHash)}/compute`, {
+        method: "POST",
+        cache: "no-store",
+        body,
+        ...(options.requestId ? { requestId: options.requestId } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+        headers: buildV2OperationsHeaders(options)
+      })
+    );
+  }
+
+  async runGateOneV2Preflights(options: GateOneV2PreflightRunOptions): Promise<GateOneV2PreflightRunResponse> {
+    const storyId = options.storyId.trim();
+    if (!storyId) {
+      throw new Error("storyId is required");
+    }
+    const body = GateOneV2PreflightRunRequestSchema.parse({
+      packet: options.packet,
+      ...(options.promoteToCurrent !== undefined ? { promoteToCurrent: options.promoteToCurrent } : {})
+    });
+    return GateOneV2PreflightRunResponseSchema.parse(
+      await this.requestJson(`/v2/internal/stories/${encodeURIComponent(storyId)}/preflights/run`, {
+        method: "POST",
+        cache: "no-store",
+        body,
+        ...(options.requestId ? { requestId: options.requestId } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+        headers: buildV2OperationsHeaders(options)
+      })
     );
   }
 
@@ -866,7 +1231,7 @@ export class MachineRoomApiClient {
       await this.requestJson(`/v2/stories${query}`, {
         cache: "no-store",
         ...(options.requestId ? { requestId: options.requestId } : {}),
-        headers: buildV2AuthHeaders(options)
+        headers: buildV2SessionHeaders(options.sessionToken)
       })
     );
   }
@@ -876,7 +1241,7 @@ export class MachineRoomApiClient {
       await this.requestJson(`/v2/stories/${encodeURIComponent(options.storyId)}`, {
         cache: "no-store",
         ...(options.requestId ? { requestId: options.requestId } : {}),
-        headers: buildV2AuthHeaders(options)
+        headers: buildV2SessionHeaders(options.sessionToken)
       })
     );
   }
@@ -886,7 +1251,7 @@ export class MachineRoomApiClient {
       await this.requestJson(`/v2/stories/${encodeURIComponent(options.storyId)}/machine-room`, {
         cache: "no-store",
         ...(options.requestId ? { requestId: options.requestId } : {}),
-        headers: buildV2AuthHeaders(options)
+        headers: buildV2SessionHeaders(options.sessionToken)
       })
     );
   }
@@ -899,7 +1264,7 @@ export class MachineRoomApiClient {
       await this.requestJson(`/v2/agents${query}`, {
         cache: "no-store",
         ...(options.requestId ? { requestId: options.requestId } : {}),
-        headers: buildV2AuthHeaders(options)
+        headers: buildV2SessionHeaders(options.sessionToken)
       })
     );
   }
@@ -909,9 +1274,199 @@ export class MachineRoomApiClient {
       await this.requestJson(`/v2/agents/${encodeURIComponent(options.botId)}`, {
         cache: "no-store",
         ...(options.requestId ? { requestId: options.requestId } : {}),
-        headers: buildV2AuthHeaders(options)
+        headers: buildV2SessionHeaders(options.sessionToken)
       })
     );
+  }
+
+  async verifyGateOneV2DisclosureReceipt(
+    options: GateOneV2DisclosureReceiptVerifyRequestOptions
+  ): Promise<GateOneV2DisclosureReceiptVerifyResponse> {
+    const storyId = options.storyId.trim();
+    if (!storyId) {
+      throw new Error("storyId is required");
+    }
+    return this.requestJson<GateOneV2DisclosureReceiptVerifyResponse>(
+      `/v2/internal/stories/${encodeURIComponent(storyId)}/disclosures/verify`,
+      {
+        method: "POST",
+        cache: "no-store",
+        body: {
+          ...(options.packetHash !== undefined ? { packetHash: options.packetHash } : {}),
+          requirementId: options.requirementId,
+          renderedArtifactHash: options.renderedArtifactHash,
+          renderTarget: options.renderTarget,
+          renderedTextHash: options.renderedTextHash,
+          rendererVersion: options.rendererVersion,
+          ...(options.verifiedAt !== undefined ? { verifiedAt: options.verifiedAt } : {})
+        },
+        ...(options.requestId ? { requestId: options.requestId } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+        headers: buildV2OperationsHeaders(options)
+      }
+    );
+  }
+
+  async evaluateGateOneV2Consensus(
+    options: GateOneV2ConsensusEvaluateRequestOptions
+  ): Promise<GateOneV2ConsensusEvaluateResponse> {
+    const storyId = options.storyId.trim();
+    if (!storyId) {
+      throw new Error("storyId is required");
+    }
+    return this.requestJson<GateOneV2ConsensusEvaluateResponse>(
+      `/v2/internal/stories/${encodeURIComponent(storyId)}/consensus/evaluate`,
+      {
+        method: "POST",
+        cache: "no-store",
+        body: {
+          ...(options.packetHash !== undefined ? { packetHash: options.packetHash } : {}),
+          ...(options.safetyDecision !== undefined ? { safetyDecision: options.safetyDecision } : {}),
+          ...(options.activeLegalHold !== undefined ? { activeLegalHold: options.activeLegalHold } : {}),
+          ...(options.killSwitchActive !== undefined ? { killSwitchActive: options.killSwitchActive } : {}),
+          ...(options.evaluatedAt !== undefined ? { evaluatedAt: options.evaluatedAt } : {})
+        },
+        ...(options.requestId ? { requestId: options.requestId } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+        headers: buildV2OperationsHeaders(options)
+      }
+    );
+  }
+
+  async rebuildGateOneProofGraph(options: GateOneProofGraphRebuildRequestOptions): Promise<{
+    storyId: string;
+    packetId: string;
+    packetHash: string;
+    status: string;
+    attempted: number;
+    inserted: number;
+  }> {
+    const storyId = options.storyId.trim();
+    if (!storyId) throw new Error("storyId is required");
+    return this.requestJson(`/v2/internal/stories/${encodeURIComponent(storyId)}/proof-graph/rebuild`, {
+      method: "POST",
+      cache: "no-store",
+      body: {
+        ...(options.packetHash !== undefined ? { packetHash: options.packetHash } : {})
+      },
+      ...(options.requestId ? { requestId: options.requestId } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      headers: buildV2OperationsHeaders(options)
+    });
+  }
+
+  async getInternalGateOneProofGraph(options: GateOneProofGraphInternalReadOptions & { storyId: string }): Promise<unknown> {
+    const storyId = options.storyId.trim();
+    if (!storyId) throw new Error("storyId is required");
+    const query = buildQuery({
+      ...(options.packetHash !== undefined ? { packetHash: options.packetHash } : {}),
+      ...(options.includePrivate !== undefined ? { includePrivate: String(options.includePrivate) } : {}),
+      ...(options.includeSealed !== undefined ? { includeSealed: String(options.includeSealed) } : {}),
+      ...(options.includeInvalidated !== undefined ? { includeInvalidated: String(options.includeInvalidated) } : {}),
+      ...(options.limit !== undefined ? { limit: String(options.limit) } : {}),
+      cursor: options.cursor
+    });
+    return this.requestJson(`/v2/internal/stories/${encodeURIComponent(storyId)}/proof-graph${query}`, {
+      cache: "no-store",
+      ...(options.requestId ? { requestId: options.requestId } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      headers: buildV2OperationsHeaders(options)
+    });
+  }
+
+  async getGateOneProofGraph(options: GateOneProofGraphInternalReadOptions & { storyId: string }): Promise<unknown> {
+    return this.getInternalGateOneProofGraph(options);
+  }
+
+  async getGateOneProofGraphDiff(options: GateOneProofGraphInternalReadOptions & { storyId: string; fromPacketHash: string; toPacketHash: string }): Promise<unknown> {
+    const storyId = options.storyId.trim();
+    if (!storyId) throw new Error("storyId is required");
+    const fromPacketHash = options.fromPacketHash.trim();
+    const toPacketHash = options.toPacketHash.trim();
+    if (!fromPacketHash || !toPacketHash) throw new Error("fromPacketHash and toPacketHash are required");
+    const query = buildQuery({
+      fromPacketHash,
+      toPacketHash,
+      ...(options.includePrivate !== undefined ? { includePrivate: String(options.includePrivate) } : {}),
+      ...(options.includeSealed !== undefined ? { includeSealed: String(options.includeSealed) } : {})
+    });
+    return this.requestJson(`/v2/internal/stories/${encodeURIComponent(storyId)}/proof-graph/diff${query}`, {
+      cache: "no-store",
+      ...(options.requestId ? { requestId: options.requestId } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      headers: buildV2OperationsHeaders(options)
+    });
+  }
+
+  async getClaimProofNeighborhood(options: GateOneProofGraphInternalReadOptions & { id: string; storyId: string; packetHash: string }): Promise<unknown> {
+    const id = options.id.trim();
+    if (!id) throw new Error("id is required");
+    const storyId = options.storyId.trim();
+    if (!storyId) throw new Error("storyId is required");
+    const packetHash = options.packetHash.trim();
+    if (!packetHash) throw new Error("packetHash is required");
+    const query = buildQuery({
+      storyId,
+      packetHash,
+      ...(options.includePrivate !== undefined ? { includePrivate: String(options.includePrivate) } : {}),
+      ...(options.includeSealed !== undefined ? { includeSealed: String(options.includeSealed) } : {})
+    });
+    return this.requestJson(`/v2/internal/claims/${encodeURIComponent(id)}/proof-neighborhood${query}`, {
+      cache: "no-store",
+      ...(options.requestId ? { requestId: options.requestId } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      headers: buildV2OperationsHeaders(options)
+    });
+  }
+
+  async getEvidenceUsage(options: GateOneProofGraphInternalReadOptions & { id: string; storyId: string; packetHash: string }): Promise<unknown> {
+    const id = options.id.trim();
+    if (!id) throw new Error("id is required");
+    const storyId = options.storyId.trim();
+    if (!storyId) throw new Error("storyId is required");
+    const packetHash = options.packetHash.trim();
+    if (!packetHash) throw new Error("packetHash is required");
+    const query = buildQuery({
+      storyId,
+      packetHash,
+      ...(options.includePrivate !== undefined ? { includePrivate: String(options.includePrivate) } : {}),
+      ...(options.includeSealed !== undefined ? { includeSealed: String(options.includeSealed) } : {})
+    });
+    return this.requestJson(`/v2/internal/evidence/${encodeURIComponent(id)}/usage${query}`, {
+      cache: "no-store",
+      ...(options.requestId ? { requestId: options.requestId } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      headers: buildV2OperationsHeaders(options)
+    });
+  }
+
+  async getSourceOriginCluster(options: GateOneProofGraphInternalReadOptions & { id: string; storyId: string; packetHash: string }): Promise<unknown> {
+    const id = options.id.trim();
+    if (!id) throw new Error("id is required");
+    const storyId = options.storyId.trim();
+    if (!storyId) throw new Error("storyId is required");
+    const packetHash = options.packetHash.trim();
+    if (!packetHash) throw new Error("packetHash is required");
+    const query = buildQuery({
+      storyId,
+      packetHash,
+      ...(options.includePrivate !== undefined ? { includePrivate: String(options.includePrivate) } : {}),
+      ...(options.includeSealed !== undefined ? { includeSealed: String(options.includeSealed) } : {})
+    });
+    return this.requestJson(`/v2/internal/sources/${encodeURIComponent(id)}/origin-cluster${query}`, {
+      cache: "no-store",
+      ...(options.requestId ? { requestId: options.requestId } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      headers: buildV2OperationsHeaders(options)
+    });
   }
 
   async getV2AuthSession(options: V2AuthSessionRequestOptions = {}): Promise<V2AuthSessionResponse> {

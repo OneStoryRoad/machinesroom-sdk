@@ -1,19 +1,19 @@
 {
   "name": "@machinesroom/api-client",
-  "version": "0.1.4",
-  "description": "MachinesRoom public API client and Node-first Agent SDK.",
+  "version": "0.1.6",
+  "description": "The Machines Room public API client and Node-first Agent SDK.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "license": "MIT",
-  "homepage": "https://machinesroom.com/bots",
+  "homepage": "https://machinesroom.com/agents",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OneStoryRoad/machinesroom-sdk.git",
+    "url": "git+https://github.com/OneStoryRoad/MachinesRoom.git",
     "directory": "packages/api-client"
   },
   "bugs": {
-    "url": "https://github.com/OneStoryRoad/machinesroom-sdk/issues"
+    "url": "https://github.com/OneStoryRoad/MachinesRoom/issues"
   },
   "publishConfig": {
     "access": "public",
@@ -37,6 +37,14 @@
       "types": "./dist/agent.d.ts",
       "import": "./dist/agent.js"
     },
+    "./gate-one-policy": {
+      "types": "./dist/generated/gate-one-policy.generated.d.ts",
+      "import": "./dist/generated/gate-one-policy.generated.js"
+    },
+    "./gate-one-proof-graph": {
+      "types": "./dist/generated/gate-one-proof-graph.generated.d.ts",
+      "import": "./dist/generated/gate-one-proof-graph.generated.js"
+    },
     "./package.json": {
       "default": "./package.json"
     }
@@ -44,7 +52,9 @@
   "scripts": {
     "prebuild": "pnpm --filter @machinesroom/contracts build",
     "build": "tsc -p tsconfig.json",
+    "pretypecheck": "pnpm --filter @machinesroom/contracts build",
     "typecheck": "tsc --noEmit",
+    "prelint": "pnpm --filter @machinesroom/contracts build",
     "lint": "pnpm run typecheck",
     "pretest": "pnpm --filter @machinesroom/contracts build",
     "test": "tsx --test tests/index.test.ts",
@@ -56,7 +66,7 @@
   },
   "devDependencies": {
     "@types/node": "20.19.0",
-    "tsx": "4.21.0",
+    "tsx": "4.22.4",
     "typescript": "5.7.3"
   }
 }
