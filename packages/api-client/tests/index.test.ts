@@ -1,6 +1,21 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import {
+  buildLaneAttestationSignaturePayload,
+  buildSpecialistReviewSignaturePayload,
+  canonicalizeStructuredDecisionSignaturePayload
+} from "@machinesroom/contracts";
+import {
+  GATE_ONE_POLICY_ID,
+  GATE_ONE_POLICY_VERSION,
+  GATE_ONE_UNIVERSAL_LANES
+} from "../src/generated/gate-one-policy.generated.js";
+import {
+  GATE_ONE_PROOF_GRAPH_ONTOLOGY_VERSION,
+  GATE_ONE_PROOF_RELATION_KINDS
+} from "../src/generated/gate-one-proof-graph.generated.js";
 import { MachineRoomApiClientError, createMachineRoomApiClient } from "../src/index.js";
 import {
   MachineRoomAgentSdkError,
@@ -11,6 +26,97 @@ import {
   stableStringifyAgentJson,
   validateAgentKitContext
 } from "../src/agent.js";
+
+function rejectAfter(ms: number, message: string): Promise<never> {
+  return new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(message)), ms);
+  });
+}
+
+function buildAbortableStallingJsonResponse(signal: AbortSignal | undefined): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (!signal) {
+          controller.error(new Error("missing request signal"));
+          return;
+        }
+        if (signal.aborted) {
+          controller.error(new Error("body aborted"));
+          return;
+        }
+        signal.addEventListener("abort", () => controller.error(new Error("body aborted")), { once: true });
+      }
+    }),
+    { status: 200, headers: { "content-type": "application/json" } }
+  );
+}
+
+type GateOnePolicyFixture = {
+  universalLanes: Array<{
+    id: string;
+    rubricVersion: string;
+    requiredCheckIds: string[];
+  }>;
+  specialists: Array<{
+    id: string;
+    triggerRuleCodes: string[];
+  }>;
+};
+
+const gateOnePolicyV2 = JSON.parse(
+  readFileSync(new URL("../../contracts/src/governance/gate-one/policy.v2.json", import.meta.url), "utf8")
+) as GateOnePolicyFixture;
+
+function gateOneUniversalLanePolicy(laneId: string) {
+  const lane = gateOnePolicyV2.universalLanes.find((candidate) => candidate.id === laneId);
+  assert.ok(lane, `missing Gate One lane policy for ${laneId}`);
+  return lane;
+}
+
+function gateOneSpecialistTriggerRuleCodes(type: string) {
+  const specialist = gateOnePolicyV2.specialists.find((candidate) => candidate.id === type);
+  assert.ok(specialist, `missing Gate One specialist policy for ${type}`);
+  return specialist.triggerRuleCodes;
+}
+
+test("@machinesroom/api-client generated Gate One subpath constants stay aligned with V2 lanes and proof ontology", () => {
+  assert.equal(GATE_ONE_POLICY_ID, "gate-one-v2-mvp");
+  assert.equal(GATE_ONE_POLICY_VERSION, "2.2.0");
+  assert.deepEqual([...GATE_ONE_UNIVERSAL_LANES], [
+    "WRITER",
+    "FACT_CHECK",
+    "RISK",
+    "SOURCE_DIVERSITY",
+    "FAIRNESS_REPLY",
+    "PROVENANCE_AUTH"
+  ]);
+  assert.equal(GATE_ONE_PROOF_GRAPH_ONTOLOGY_VERSION, "gate-one-proof-graph-v1");
+  assert.ok(GATE_ONE_PROOF_RELATION_KINDS.includes("CONSENSUS_DEPENDS_ON_SAFETY_GATE"));
+});
+
+function buildGateOneSmokeChecks(
+  checkIds: readonly string[],
+  input: {
+    severity?: string;
+    evidenceIds?: string[];
+    objectRefs?: string[];
+    publicRationale?: string;
+    requiredDisclosureIds?: string[];
+  } = {}
+) {
+  return checkIds.map((checkId) => ({
+    checkId,
+    status: "PASS",
+    severity: input.severity ?? "LOW",
+    claimIds: ["claim-1"],
+    evidenceIds: input.evidenceIds ?? ["evidence-1"],
+    objectRefs: input.objectRefs ?? ["claim:claim-1"],
+    publicRationale: input.publicRationale ?? `The ${checkId} check is satisfied.`,
+    requiredDisclosureIds: input.requiredDisclosureIds ?? [],
+    requiredSpecialistTypes: []
+  }));
+}
 
 test("@machinesroom/api-client builds public read URLs and applies request IDs", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -76,6 +182,57 @@ test("@machinesroom/api-client reads public story versions", async () => {
   assert.equal(response.versions[0]?.current, true);
 });
 
+test("@machinesroom/api-client preserves formatted article bodies on public story reads", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const client = createMachineRoomApiClient({
+    baseUrl: "https://example.com/api",
+    fetch: (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(
+        JSON.stringify({
+          id: "story-1",
+          title: "Structured story",
+          state: "PROVISIONAL",
+          editorialState: "PROVISIONAL",
+          promotionState: "PROVISIONAL",
+          publicationStage: "CANDIDATE",
+          reviewStatus: "EMERGING",
+          room: "world",
+          language: "en",
+          summary: ["One summary bullet."],
+          article: {
+            schemaVersion: 1,
+            articleType: "analysis",
+            dek: "A structured article document sits beside the evidence ledger.",
+            revisionHash: "a".repeat(64),
+            updatedAt: "2026-05-30T12:00:00.000Z",
+            document: {
+              schemaVersion: 1,
+              blocks: [
+                {
+                  type: "paragraph",
+                  text: [
+                    { text: "Readable article prose with " },
+                    { text: "source evidence", marks: [{ type: "sourceRef", sourceKey: "source-1" }] },
+                    { text: "." }
+                  ]
+                }
+              ]
+            }
+          }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }) as unknown as typeof fetch
+  });
+
+  const response = await client.getStory("story-1");
+
+  assert.equal(calls[0]?.url, "https://example.com/v1/stories/story-1");
+  assert.equal(response.article?.articleType, "analysis");
+  assert.equal(response.article?.document.blocks[0]?.type, "paragraph");
+});
+
 test("@machinesroom/api-client sends idempotency keys on writes", async () => {
   const calls: RequestInit[] = [];
   const client = createMachineRoomApiClient({
@@ -96,6 +253,65 @@ test("@machinesroom/api-client sends idempotency keys on writes", async () => {
   assert.equal(headers["Idempotency-Key"], "retry-key:1");
   assert.equal(headers["content-type"], "application/json");
   assert.equal(calls[0]?.body, JSON.stringify({ value: 1 }));
+});
+
+test("@machinesroom/api-client passes explicit request signals", async () => {
+  const calls: RequestInit[] = [];
+  const controller = new AbortController();
+  const client = createMachineRoomApiClient({
+    baseUrl: "https://example.com",
+    fetch: (async (_url: string, init: RequestInit) => {
+      calls.push(init);
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch
+  });
+
+  await client.requestJson("/v1/example", { signal: controller.signal });
+
+  assert.equal(calls[0]?.signal, controller.signal);
+});
+
+test("@machinesroom/api-client aborts requests after configured timeout", async () => {
+  let observedSignal: AbortSignal | undefined;
+  const client = createMachineRoomApiClient({
+    baseUrl: "https://example.com",
+    timeoutMs: 1,
+    fetch: (async (_url: string, init: RequestInit) => {
+      observedSignal = init.signal as AbortSignal | undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        if (!observedSignal) {
+          reject(new Error("missing request signal"));
+          return;
+        }
+        if (observedSignal.aborted) {
+          reject(new Error("fetch aborted"));
+          return;
+        }
+        observedSignal.addEventListener("abort", () => reject(new Error("fetch aborted")), { once: true });
+      });
+    }) as unknown as typeof fetch
+  });
+
+  await assert.rejects(() => client.requestJson("/v1/hang"), /fetch aborted/);
+  assert.equal(observedSignal?.aborted, true);
+});
+
+test("@machinesroom/api-client keeps timeout active while reading response bodies", async () => {
+  let observedSignal: AbortSignal | undefined;
+  const client = createMachineRoomApiClient({
+    baseUrl: "https://example.com",
+    timeoutMs: 1,
+    fetch: (async (_url: string, init: RequestInit) => {
+      observedSignal = init.signal as AbortSignal | undefined;
+      return buildAbortableStallingJsonResponse(observedSignal);
+    }) as unknown as typeof fetch
+  });
+
+  await assert.rejects(
+    () => Promise.race([client.requestJson("/v1/body-hang"), rejectAfter(100, "body timeout did not fire")]),
+    /body aborted/
+  );
+  assert.equal(observedSignal?.aborted, true);
 });
 
 test("@machinesroom/api-client submits signed story revision proposals and votes", async () => {
@@ -142,8 +358,8 @@ test("@machinesroom/api-client submits signed story revision proposals and votes
     verified: true,
     basePacketHash: "a".repeat(64),
     proposedArticle: {
-      schemaVersion: 1,
-      blocks: [{ type: "paragraph", text: [{ text: "Proposed article body." }] }]
+      schemaVersion: 1 as const,
+      blocks: [{ type: "paragraph" as const, text: [{ text: "Proposed article body." }] }]
     },
     sourceEvidence: { sourceKeys: ["src-1"] }
   };
@@ -324,6 +540,54 @@ test("@machinesroom/api-client/agent reuses the AgentKit nonce for verified high
   assert.equal(headers["x-agent-nonce"], "nonce-agentkit-high-level");
 });
 
+test("@machinesroom/api-client/agent keeps timeout active with a caller signal", async () => {
+  const identity = generateMachineRoomAgentIdentity();
+  const controller = new AbortController();
+  let observedSignal: AbortSignal | undefined;
+  const client = createMachineRoomAgentClient({
+    apiBaseUrl: "https://api.example.com",
+    identity: { botId: identity.botId, privateKey: identity.privateKey },
+    fetch: (async (_url: string, init: RequestInit) => {
+      observedSignal = init.signal as AbortSignal | undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        if (!observedSignal) {
+          reject(new Error("missing request signal"));
+          return;
+        }
+        if (observedSignal.aborted) {
+          reject(new Error("fetch aborted"));
+          return;
+        }
+        observedSignal.addEventListener("abort", () => reject(new Error("fetch aborted")), { once: true });
+      });
+    }) as unknown as typeof fetch
+  });
+
+  await assert.rejects(() => client.fetchBootstrap({ signal: controller.signal, timeoutMs: 1 }), /fetch aborted/);
+  assert.equal(observedSignal?.aborted, true);
+  assert.equal(controller.signal.aborted, false);
+});
+
+test("@machinesroom/api-client/agent keeps timeout active while reading response bodies", async () => {
+  const identity = generateMachineRoomAgentIdentity();
+  let observedSignal: AbortSignal | undefined;
+  const client = createMachineRoomAgentClient({
+    apiBaseUrl: "https://api.example.com",
+    identity: { botId: identity.botId, privateKey: identity.privateKey },
+    timeoutMs: 1,
+    fetch: (async (_url: string, init: RequestInit) => {
+      observedSignal = init.signal as AbortSignal | undefined;
+      return buildAbortableStallingJsonResponse(observedSignal);
+    }) as unknown as typeof fetch
+  });
+
+  await assert.rejects(
+    () => Promise.race([client.fetchBootstrap(), rejectAfter(100, "body timeout did not fire")]),
+    /body aborted/
+  );
+  assert.equal(observedSignal?.aborted, true);
+});
+
 test("@machinesroom/api-client/agent sends high-level signed V1 writes with idempotency", async () => {
   const identity = generateMachineRoomAgentIdentity();
   const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -348,10 +612,9 @@ test("@machinesroom/api-client/agent sends high-level signed V1 writes with idem
       claims: [{ text: "Candidate body claim.", citations: ["source-1"] }],
       sources: [{ sourceKey: "source-1", sourceName: "Example", url: "https://example.com" }],
       article: {
-        schemaVersion: 1,
-        generatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        blocks: [{ type: "paragraph", text: [{ text: "Candidate body." }] }]
-      },
+        schemaVersion: 1 as const,
+        blocks: [{ type: "paragraph" as const, text: [{ text: "Candidate body." }] }]
+      }
     },
     {
       idempotencyKey: "agent-candidate:1",
@@ -372,7 +635,7 @@ test("@machinesroom/api-client/agent sends high-level signed V1 writes with idem
   const bodyJson = calls[0]?.init.body as string;
   const body = JSON.parse(bodyJson) as Record<string, unknown>;
   assert.equal(body.botId, identity.botId);
-  assert.equal((body.article as { generatedAt?: string }).generatedAt, "2026-01-01T00:00:00.000Z");
+  assert.equal(((body.article as { blocks?: Array<{ type?: string }> }).blocks ?? [])[0]?.type, "paragraph");
   assert.equal(typeof headers["x-agent-signature"], "string");
   const canonicalBody = stableStringifyAgentJson(body);
   const signedMessage = `tmr-agent-v1:tmr.1778580000000.nonce-candidate-test.POST./v1/candidates.${canonicalBody}`;
@@ -382,6 +645,165 @@ test("@machinesroom/api-client/agent sends high-level signed V1 writes with idem
       Buffer.from(signedMessage, "utf8"),
       crypto.createPublicKey(identity.privateKey),
       Buffer.from(headers["x-agent-signature"], "base64url")
+    ),
+    true
+  );
+});
+
+test("@machinesroom/api-client/agent sends signed Gate One V2 structured review writes", async () => {
+  const identity = generateMachineRoomAgentIdentity();
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const client = createMachineRoomAgentClient({
+    apiBaseUrl: "https://api.example.com",
+    identity: { botId: identity.botId, privateKey: identity.privateKey },
+    fetch: (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ accepted: false, disabled: true }), {
+        status: 202,
+        headers: { "content-type": "application/json" }
+      });
+    }) as unknown as typeof fetch
+  });
+  const packetHash = `sha256:${"a".repeat(64)}` as const;
+  const promptDigest = `sha256:${"b".repeat(64)}` as const;
+  const factCheckPolicy = gateOneUniversalLanePolicy("FACT_CHECK");
+  const legalRightsCheckIds = gateOneSpecialistTriggerRuleCodes("LEGAL_RIGHTS");
+  const reviewer = {
+    botId: identity.botId,
+    controllingOwnerId: "owner-fact-1",
+    verificationStatus: "VERIFIED" as const,
+    provider: "provider-a",
+    modelFamily: "model-family-a",
+    modelVersion: "model-a-2026-06",
+    toolchainVersion: "toolchain-v1",
+    retrievalProviderIds: ["retrieval-a"],
+    retrievalIndexVersions: ["index-a-1"],
+    promptOrRubricDigest: promptDigest
+  };
+
+  await client.submitGateOneAttestationV2(
+    {
+      verified: true,
+      linkedHumanId: "human-gate-one-v2",
+      schemaVersion: "2.0",
+      storyId: "story-1",
+      packetHash,
+      lane: "FACT_CHECK",
+      policyVersion: "2.2.0",
+      rubricVersion: factCheckPolicy.rubricVersion,
+      verdict: "PASS",
+      checks: buildGateOneSmokeChecks(factCheckPolicy.requiredCheckIds, {
+        publicRationale: "The public evidence supports the claim."
+      }),
+      publicRationale: "The claim is supported by public evidence.",
+      requiredDisclosureIds: [],
+      declaredConflicts: [],
+      reviewer,
+      signedAt: "2026-06-24T12:00:00.000Z",
+      nonce: "nonce-gate-one-v2-a",
+      keyVersion: "key-v1"
+    },
+    {
+      nonce: "transport-nonce-g1v2-a",
+      timestamp: "1778580000000",
+      requestId: "req-g1v2-attestation"
+    }
+  );
+
+  await client.submitGateOneSpecialistReviewV2(
+    {
+      schemaVersion: "2.0",
+      storyId: "story-1",
+      packetHash,
+      requirementId: "requirement-legal-1",
+      type: "LEGAL_RIGHTS",
+      policyVersion: "2.2.0",
+      rubricVersion: "LEGAL_RIGHTS_RUBRIC_V1",
+      verdict: "PASS_WITH_DISCLOSURE",
+      checks: buildGateOneSmokeChecks(legalRightsCheckIds, {
+        severity: "MEDIUM",
+        objectRefs: ["requirement:requirement-legal-1"],
+        publicRationale: "A response-pending disclosure is required.",
+        requiredDisclosureIds: ["disclosure-reply-pending"]
+      }),
+      publicRationale: "Publication requires the configured disclosure.",
+      requiredDisclosureIds: ["disclosure-reply-pending"],
+      declaredConflicts: [],
+      reviewer,
+      signedAt: "2026-06-24T12:01:00.000Z",
+      nonce: "nonce-gate-one-v2-s",
+      keyVersion: "key-v1"
+    },
+    {
+      nonce: "transport-nonce-g1v2-s",
+      timestamp: "1778580000001",
+      requestId: "req-g1v2-specialist"
+    }
+  );
+
+  assert.equal(calls[0]?.url, "https://api.example.com/v2/agents/attestations");
+  assert.equal(calls[1]?.url, "https://api.example.com/v2/agents/specialist-reviews");
+  const attestationHeaders = calls[0]?.init.headers as Record<string, string>;
+  const attestationBody = JSON.parse(calls[0]?.init.body as string) as Record<string, unknown>;
+  assert.equal(attestationBody.botId, identity.botId);
+  assert.equal(attestationBody.verified, true);
+  assert.equal(attestationBody.linkedHumanId, "human-gate-one-v2");
+  assert.equal((attestationBody.reviewer as { botId?: string }).botId, identity.botId);
+  const {
+    botId: _attestationBotId,
+    verified: _attestationVerified,
+    linkedHumanId: _attestationLinkedHumanId,
+    signature: attestationStructuredSignature,
+    ...attestationStructuredBody
+  } = attestationBody;
+  assert.equal(typeof attestationStructuredSignature, "string");
+  assert.equal(
+    crypto.verify(
+      null,
+      Buffer.from(
+        canonicalizeStructuredDecisionSignaturePayload(
+          buildLaneAttestationSignaturePayload(attestationStructuredBody as Parameters<typeof buildLaneAttestationSignaturePayload>[0])
+        ),
+        "utf8"
+      ),
+      crypto.createPublicKey(identity.privateKey),
+      Buffer.from(attestationStructuredSignature, "base64url")
+    ),
+    true
+  );
+  assert.equal(attestationHeaders["x-request-id"], "req-g1v2-attestation");
+  const canonicalBody = stableStringifyAgentJson(attestationBody);
+  const signedMessage = `tmr-agent-v1:tmr.1778580000000.transport-nonce-g1v2-a.POST./v2/agents/attestations.${canonicalBody}`;
+  assert.equal(
+    crypto.verify(
+      null,
+      Buffer.from(signedMessage, "utf8"),
+      crypto.createPublicKey(identity.privateKey),
+      Buffer.from(attestationHeaders["x-agent-signature"], "base64url")
+    ),
+    true
+  );
+
+  const specialistBody = JSON.parse(calls[1]?.init.body as string) as Record<string, unknown>;
+  const {
+    botId: _specialistBotId,
+    verified: _specialistVerified,
+    linkedHumanId: _specialistLinkedHumanId,
+    signature: specialistStructuredSignature,
+    ...specialistStructuredBody
+  } = specialistBody;
+  assert.equal(typeof specialistStructuredSignature, "string");
+  assert.equal(
+    crypto.verify(
+      null,
+      Buffer.from(
+        canonicalizeStructuredDecisionSignaturePayload(
+          buildSpecialistReviewSignaturePayload(specialistStructuredBody as Parameters<typeof buildSpecialistReviewSignaturePayload>[0])
+        ),
+        "utf8"
+      ),
+      crypto.createPublicKey(identity.privateKey),
+      Buffer.from(specialistStructuredSignature, "base64url")
     ),
     true
   );
@@ -424,13 +846,213 @@ test("@machinesroom/api-client/agent surfaces actionable V1 errors", async () =>
   }
 });
 
-test("@machinesroom/api-client lists V2 stories with actor auth headers", async () => {
+test("@machinesroom/api-client/agent signs the shadow route with its route-specific context", async () => {
+  const identity = generateMachineRoomAgentIdentity();
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const client = createMachineRoomAgentClient({
+    apiBaseUrl: "https://api.example.com",
+    identity: { botId: identity.botId, privateKey: identity.privateKey },
+    fetch: (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ accepted: true }), { status: 202, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch
+  });
+  const policy = gateOneUniversalLanePolicy("FAIRNESS_REPLY");
+  await client.submitGateOneShadowReviewV2({
+    assignmentId: "shadow-assignment-1",
+    schemaVersion: "2.0",
+    storyId: "story-1",
+    packetHash: `sha256:${"a".repeat(64)}`,
+    lane: "FAIRNESS_REPLY",
+    policyVersion: "2.2.0",
+    rubricVersion: policy.rubricVersion,
+    verdict: "PASS",
+    checks: buildGateOneSmokeChecks(policy.requiredCheckIds, { publicRationale: "Evidence supports the decision." }),
+    publicRationale: "Evidence supports the decision.",
+    requiredDisclosureIds: [],
+    declaredConflicts: [],
+    reviewer: {
+      botId: identity.botId,
+      controllingOwnerId: "owner-shadow-1",
+      verificationStatus: "UNVERIFIED",
+      provider: "provider-a",
+      modelFamily: "model-family-a",
+      modelVersion: "model-a",
+      toolchainVersion: "toolchain-a",
+      retrievalProviderIds: [],
+      retrievalIndexVersions: [],
+      promptOrRubricDigest: `sha256:${"b".repeat(64)}`
+    },
+    signedAt: "2026-07-09T00:00:00.000Z",
+    nonce: "shadow-structured-nonce",
+    keyVersion: "key-v1"
+  }, { nonce: "shadow-transport-nonce", timestamp: "1783555200000" });
+
+  assert.equal(calls[0]?.url, "https://api.example.com/v2/agents/shadow-review-submissions");
+  const body = JSON.parse(calls[0]?.init.body as string) as Record<string, unknown>;
+  const { botId: _botId, verified: _verified, linkedHumanId: _linkedHumanId, assignmentId: _assignmentId, signature, ...structured } = body;
+  assert.equal(typeof signature, "string");
+  assert.equal(body.assignmentId, "shadow-assignment-1");
+  assert.equal(
+    crypto.verify(
+      null,
+      Buffer.from(canonicalizeStructuredDecisionSignaturePayload(buildLaneAttestationSignaturePayload(
+        structured as Parameters<typeof buildLaneAttestationSignaturePayload>[0],
+        { domain: "machinesroom.gate-one.v2", apiVersion: "v2", method: "POST", path: "/v2/agents/shadow-review-submissions" }
+      ))),
+      crypto.createPublicKey(identity.privateKey),
+      Buffer.from(signature as string, "base64url")
+    ),
+    true
+  );
+});
+
+test("@machinesroom/api-client/agent discovers public and caller-scoped capabilities without AgentKit", async () => {
+  const identity = generateMachineRoomAgentIdentity();
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const observedAt = "2026-07-09T00:00:00.000Z";
+  const unknown = { state: "UNKNOWN", reasonCode: "TEST", nextAction: "Use the test fixture." };
+  const runtime = {
+    observedAt,
+    source: "runtime_configuration",
+    selfServeOnboarding: unknown,
+    mcpReadPreflight: unknown,
+    v1FirstSmoke: unknown,
+    v2UniversalWrites: unknown,
+    v2ShadowAssignments: unknown,
+    v2ShadowSubmissions: unknown,
+    v2SpecialistAssignments: unknown,
+    v2SpecialistSubmissions: unknown,
+    publicTrustReceipt: unknown,
+    proofGraph: unknown
+  };
+  const client = createMachineRoomAgentClient({
+    apiBaseUrl: "https://api.example.com",
+    identity: { botId: identity.botId, privateKey: identity.privateKey },
+    fetch: (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      const body = url.endsWith("/v1/capabilities")
+        ? {
+            schemaVersion: 1,
+            observedAt,
+            docsVersion: "2026-07-agent-guidance-alignment-v2",
+            compatibleSdkRange: ">=0.1.4 <0.2.0",
+            artifactUrls: { bootstrap: "/.well-known/agent-bootstrap.json" },
+            policyPosture: { policyId: "gate-one-v2-mvp", policyVersion: "2.2.0", policyDigest: `sha256:${"a".repeat(64)}`, globalState: "ENFORCE", canaryPercent: 100 },
+            runtimeCapabilities: runtime,
+            proofGraphFormats: ["JSON", "JSON_LD", "PROV", "CLAIM_REVIEW"],
+            boundaries: { mcpWrites: false, browserPrivateKeys: false, humanGateTwoOnly: true, evidenceIsPublicationAuthority: false }
+          }
+        : url.endsWith("/v1/agents/me/capabilities")
+          ? {
+              schemaVersion: 1,
+              observedAt,
+              docsVersion: "2026-07-agent-guidance-alignment-v2",
+              sdkRange: ">=0.1.4 <0.2.0",
+              botId: identity.botId,
+              registrationState: "ACTIVE",
+              trustState: "UNVERIFIED",
+              ownershipVerified: false,
+              allowedV1Actions: [],
+              universalLaneGrants: [],
+              shadowLaneEligibility: [],
+              specialistTypeEligibility: [],
+              featureAvailability: runtime,
+              assignmentRequired: { shadow: true, specialist: true },
+              safeNextActions: ["Complete Path A."]
+            }
+          : { schemaVersion: 1, observedAt, botId: identity.botId, blindFirstPass: true, peerSubmissionsVisible: false, assignments: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch
+  });
+
+  await client.getPublicCapabilities();
+  await client.getMyAgentCapabilities({ nonce: "self-capability-nonce", timestamp: "1783555200000" });
+  await client.getMyGateOneAssignmentsV2({ nonce: "self-assignment-nonce", timestamp: "1783555200001" });
+
+  const publicHeaders = calls[0]?.init.headers as Record<string, string>;
+  assert.equal(publicHeaders["x-agent-signature"], undefined);
+  for (const call of calls.slice(1)) {
+    const headers = call.init.headers as Record<string, string>;
+    assert.equal(headers["x-agent-bot-id"], identity.botId);
+    assert.equal(typeof headers["x-agent-signature"], "string");
+    assert.equal(headers.agentkit, undefined);
+    assert.equal(call.init.body, undefined);
+  }
+});
+
+test("@machinesroom/api-client/agent reads Machine Room proof graph exports without signed-write headers", async () => {
+  const identity = generateMachineRoomAgentIdentity();
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const publicGraph = {
+    schemaVersion: "1.0",
+    ontologyVersion: "gate-one-proof-graph-v1",
+    storyId: "story 1",
+    packetHash: `sha256:${"b".repeat(64)}`,
+    generatedAt: "2026-07-08T00:00:00.000Z",
+    redactionVersion: "gate-one-proof-graph-public-v1",
+    graphHash: `sha256:${"a".repeat(64)}`,
+    publicRelationLimit: 25,
+    nodes: [],
+    relations: [],
+    omitted: {
+      sealedRelationCount: 0,
+      privateRelationCount: 0,
+      rawTraceRelationCount: 0,
+      reviewerSecretRelationCount: 0,
+      truncatedPublicRelationCount: 0
+    }
+  };
+  const client = createMachineRoomAgentClient({
+    apiBaseUrl: "https://api.example.com",
+    identity: { botId: identity.botId, privateKey: identity.privateKey },
+    fetch: (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      const body = url.includes("/proof-graph?") ? publicGraph : { "@context": "https://schema.org" };
+      const contentType = url.endsWith(".jsonld") ? "application/ld+json" : "application/json";
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": contentType }
+      });
+    }) as unknown as typeof fetch
+  });
+
+  const graph = await client.getMachineRoomProofGraph({
+    storyId: " story 1 ",
+    packetHash: `sha256:${"b".repeat(64)}`,
+    limit: 25,
+    cursor: "next",
+    requestId: "req-proof-graph"
+  });
+  const jsonLd = await client.getMachineRoomProofGraphJsonLd({ storyId: "story 1" });
+  await client.getMachineRoomProofGraphProv({ storyId: "story 1" });
+  const claimReview = await client.getMachineRoomProofGraphClaimReview({ storyId: "story 1" });
+
+  assert.equal(graph.graphHash, `sha256:${"a".repeat(64)}`);
+  assert.equal(jsonLd["@context"], "https://schema.org");
+  assert.equal(claimReview["@context"], "https://schema.org");
+  assert.equal(
+    calls[0]?.url,
+    `https://api.example.com/v1/stories/story%201/machine-room/proof-graph?packetHash=sha256%3A${"b".repeat(64)}&limit=25&cursor=next`
+  );
+  assert.equal((calls[0]?.init.headers as Record<string, string>)["x-request-id"], "req-proof-graph");
+  assert.equal(calls[1]?.url, "https://api.example.com/v1/stories/story%201/machine-room/proof-graph.jsonld");
+  assert.equal(calls[2]?.url, "https://api.example.com/v1/stories/story%201/machine-room/prov.json");
+  assert.equal(calls[3]?.url, "https://api.example.com/v1/stories/story%201/machine-room/claim-review.jsonld");
+  for (const call of calls) {
+    const headers = call.init.headers as Record<string, string>;
+    assert.equal(headers["x-agent-signature"], undefined);
+    assert.equal(headers["x-agent-nonce"], undefined);
+  }
+});
+
+test("@machinesroom/api-client lists V2 stories with session auth headers", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const client = createMachineRoomApiClient({
     baseUrl: "https://example.com",
     headers: {
-      Authorization: "Bearer tmr_test_service_account_configured_bearer_should_not_send",
-      "X-API-Key": "tmr_test_service_account_configured_default_should_not_send",
+      Authorization: "Bearer tmr_live_service_account_configured_bearer_should_not_send",
+      "X-API-Key": "tmr_live_service_account_configured_default_should_not_send",
       "x-client-name": "contract-test"
     },
     fetch: (async (url: string, init: RequestInit) => {
@@ -484,13 +1106,13 @@ test("@machinesroom/api-client lists V2 stories with actor auth headers", async 
   assert.equal(calls[0]?.init.cache, "no-store");
 });
 
-test("@machinesroom/api-client reads V2 stories with actor auth headers", async () => {
+test("@machinesroom/api-client reads V2 stories with session auth headers", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const client = createMachineRoomApiClient({
     baseUrl: "https://example.com",
     headers: {
-      Authorization: "Bearer tmr_test_service_account_configured_bearer_should_not_send",
-      "X-API-Key": "tmr_test_service_account_configured_default_should_not_send",
+      Authorization: "Bearer tmr_live_service_account_configured_bearer_should_not_send",
+      "X-API-Key": "tmr_live_service_account_configured_default_should_not_send",
       "x-client-name": "contract-test"
     },
     fetch: (async (url: string, init: RequestInit) => {
@@ -533,13 +1155,13 @@ test("@machinesroom/api-client reads V2 stories with actor auth headers", async 
   assert.equal(calls[0]?.init.cache, "no-store");
 });
 
-test("@machinesroom/api-client reads V2 stories with API-key headers", async () => {
+test("@machinesroom/api-client reads V2 stories without inherited API-key headers", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const client = createMachineRoomApiClient({
     baseUrl: "https://example.com",
     headers: {
-      Authorization: "Bearer tmr_test_service_account_configured_bearer_should_not_send",
-      "X-API-Key": "tmr_test_service_account_configured_default_should_not_send",
+      Authorization: "Bearer tmr_live_service_account_configured_bearer_should_not_send",
+      "X-API-Key": "tmr_live_service_account_configured_default_should_not_send",
       "x-client-name": "contract-test"
     },
     fetch: (async (url: string, init: RequestInit) => {
@@ -567,20 +1189,20 @@ test("@machinesroom/api-client reads V2 stories with API-key headers", async () 
 
   await client.getV2Story({
     storyId: "story_123",
-    apiKey: " tmr_test_service_account_story_key_1234567890 ",
+    sessionToken: " session-token-valid-story-service-123 ",
     requestId: "req_v2_story_service"
   });
 
   const headers = calls[0]?.init.headers as Record<string, string>;
-  assert.equal(headers["x-api-key"], "tmr_test_service_account_story_key_1234567890");
-  assert.equal(headers["x-user-session-token"], undefined);
+  assert.equal(headers["x-user-session-token"], "session-token-valid-story-service-123");
+  assert.equal(headers["x-api-key"], undefined);
   assert.equal(headers.Authorization, undefined);
   assert.equal(headers["X-API-Key"], undefined);
   assert.equal(headers["x-client-name"], "contract-test");
   assert.equal(headers["x-request-id"], "req_v2_story_service");
 });
 
-test("@machinesroom/api-client reads V2 machine-room evidence with API-key headers", async () => {
+test("@machinesroom/api-client reads V2 machine-room evidence with session headers", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const client = createMachineRoomApiClient({
     baseUrl: "https://example.com",
@@ -623,19 +1245,206 @@ test("@machinesroom/api-client reads V2 machine-room evidence with API-key heade
 
   const response = await client.getV2MachineRoom({
     storyId: "story_123",
-    apiKey: " tmr_test_service_account_story_key_1234567890 ",
+    sessionToken: " session-token-valid-machine-room-123 ",
     requestId: "req_v2_machine_room"
   });
 
   assert.equal(response.data.storyId, "story_123");
   assert.equal(calls[0]?.url, "https://example.com/v2/stories/story_123/machine-room");
   const headers = calls[0]?.init.headers as Record<string, string>;
-  assert.equal(headers["x-api-key"], "tmr_test_service_account_story_key_1234567890");
-  assert.equal(headers["x-user-session-token"], undefined);
+  assert.equal(headers["x-user-session-token"], "session-token-valid-machine-room-123");
+  assert.equal(headers["x-api-key"], undefined);
   assert.equal(headers["x-request-id"], "req_v2_machine_room");
 });
 
-test("@machinesroom/api-client reads V2 agents with actor auth headers", async () => {
+test("@machinesroom/api-client reads public proof graph export formats", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const client = createMachineRoomApiClient({
+    baseUrl: "https://example.com/api",
+    fetch: (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(
+        JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "ItemList",
+          graphHash: `sha256:${"a".repeat(64)}`
+        }),
+        { status: 200, headers: { "content-type": url.includes("prov.json") ? "application/json" : "application/ld+json" } }
+      );
+    }) as unknown as typeof fetch
+  });
+
+  const jsonLd = await client.getMachineRoomProofGraphJsonLd({
+    storyId: " story_123 ",
+    packetHash: `sha256:${"b".repeat(64)}`,
+    limit: 5,
+    cursor: " export_cursor_1 ",
+    requestId: "req_jsonld"
+  });
+  const prov = await client.getMachineRoomProofGraphProv({
+    storyId: "story_123",
+    packetHash: `sha256:${"b".repeat(64)}`,
+    limit: 6,
+    cursor: "export_cursor_2",
+    requestId: "req_prov"
+  });
+  const claimReview = await client.getMachineRoomProofGraphClaimReview({
+    storyId: "story_123",
+    packetHash: `sha256:${"b".repeat(64)}`,
+    limit: 7,
+    cursor: "export_cursor_3",
+    requestId: "req_claim_review"
+  });
+
+  assert.equal(jsonLd["@type"], "ItemList");
+  assert.equal(prov.graphHash, `sha256:${"a".repeat(64)}`);
+  assert.equal(claimReview["@context"], "https://schema.org");
+  assert.deepEqual(calls.map((call) => call.url), [
+    `https://example.com/v1/stories/story_123/machine-room/proof-graph.jsonld?packetHash=sha256%3A${"b".repeat(64)}&limit=5&cursor=export_cursor_1`,
+    `https://example.com/v1/stories/story_123/machine-room/prov.json?packetHash=sha256%3A${"b".repeat(64)}&limit=6&cursor=export_cursor_2`,
+    `https://example.com/v1/stories/story_123/machine-room/claim-review.jsonld?packetHash=sha256%3A${"b".repeat(64)}&limit=7&cursor=export_cursor_3`
+  ]);
+  assert.equal((calls[0]?.init.headers as Record<string, string>)["x-request-id"], "req_jsonld");
+  assert.equal((calls[1]?.init.headers as Record<string, string>)["x-request-id"], "req_prov");
+  assert.equal((calls[2]?.init.headers as Record<string, string>)["x-request-id"], "req_claim_review");
+  assert.equal((calls[0]?.init.headers as Record<string, string>)["x-operations-token"], undefined);
+  assert.equal(calls[0]?.init.cache, "no-store");
+});
+
+test("@machinesroom/api-client reads paginated public proof graph with current packet default", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const client = createMachineRoomApiClient({
+    baseUrl: "https://example.com/api",
+    fetch: (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(
+        JSON.stringify({
+          schemaVersion: "1.0",
+          ontologyVersion: "gate-one-proof-graph-v1",
+          storyId: "story_123",
+          packetHash: `sha256:${"b".repeat(64)}`,
+          generatedAt: "2026-07-06T12:00:00.000Z",
+          redactionVersion: "gate-one-proof-graph-public-v1",
+          graphHash: `sha256:${"a".repeat(64)}`,
+          publicRelationLimit: 2,
+          nextCursor: "proof_row_2",
+          nodes: [],
+          relations: [],
+          omitted: {
+            sealedRelationCount: 0,
+            privateRelationCount: 0,
+            rawTraceRelationCount: 0,
+            reviewerSecretRelationCount: 0,
+            truncatedPublicRelationCount: 3
+          }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }) as unknown as typeof fetch
+  });
+
+  const graph = await client.getMachineRoomProofGraph({
+    storyId: " story_123 ",
+    limit: 2,
+    cursor: " proof_row_1 ",
+    requestId: "req_public_graph"
+  });
+
+  assert.equal(graph.nextCursor, "proof_row_2");
+  assert.equal(graph.omitted.truncatedPublicRelationCount, 3);
+  assert.equal(calls[0]?.url, "https://example.com/v1/stories/story_123/machine-room/proof-graph?limit=2&cursor=proof_row_1");
+  assert.equal((calls[0]?.init.headers as Record<string, string>)["x-request-id"], "req_public_graph");
+  assert.equal((calls[0]?.init.headers as Record<string, string>)["x-operations-token"], undefined);
+  assert.equal(calls[0]?.init.cache, "no-store");
+});
+
+test("@machinesroom/api-client uses operations-token headers for internal proof graph helpers", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const client = createMachineRoomApiClient({
+    baseUrl: "https://example.com/api",
+    fetch: (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch
+  });
+
+  await client.getInternalGateOneProofGraph({
+    storyId: " story/123 ",
+    packetHash: `sha256:${"b".repeat(64)}`,
+    includePrivate: true,
+    includeSealed: false,
+    includeInvalidated: true,
+    limit: 5,
+    cursor: " cursor 1 ",
+    operationsToken: " ops-token-secret ",
+    requestId: "req_internal_graph"
+  });
+  await client.getGateOneProofGraphDiff({
+    storyId: "story/123",
+    fromPacketHash: `sha256:${"c".repeat(64)}`,
+    toPacketHash: `sha256:${"d".repeat(64)}`,
+    operationsToken: "ops-token-secret",
+    requestId: "req_graph_diff"
+  });
+  await client.rebuildGateOneProofGraph({
+    storyId: "story/123",
+    packetHash: `sha256:${"e".repeat(64)}`,
+    operationsToken: "ops-token-secret",
+    requestId: "req_rebuild"
+  });
+  await client.getClaimProofNeighborhood({
+    id: " claim/1 ",
+    storyId: "story/123",
+    packetHash: `sha256:${"f".repeat(64)}`,
+    operationsToken: "ops-token-secret"
+  });
+  await client.getEvidenceUsage({
+    id: " evidence/1 ",
+    storyId: "story/123",
+    packetHash: `sha256:${"1".repeat(64)}`,
+    operationsToken: "ops-token-secret"
+  });
+  await client.getSourceOriginCluster({
+    id: " source/1 ",
+    storyId: "story/123",
+    packetHash: `sha256:${"2".repeat(64)}`,
+    operationsToken: "ops-token-secret"
+  });
+
+  assert.equal(
+    calls[0]?.url,
+    `https://example.com/v2/internal/stories/story%2F123/proof-graph?packetHash=sha256%3A${"b".repeat(64)}&includePrivate=true&includeSealed=false&includeInvalidated=true&limit=5&cursor=cursor%201`
+  );
+  assert.equal(
+    calls[1]?.url,
+    `https://example.com/v2/internal/stories/story%2F123/proof-graph/diff?fromPacketHash=sha256%3A${"c".repeat(64)}&toPacketHash=sha256%3A${"d".repeat(64)}`
+  );
+  assert.equal(calls[2]?.url, "https://example.com/v2/internal/stories/story%2F123/proof-graph/rebuild");
+  assert.equal(
+    calls[3]?.url,
+    `https://example.com/v2/internal/claims/claim%2F1/proof-neighborhood?storyId=story%2F123&packetHash=sha256%3A${"f".repeat(64)}`
+  );
+  assert.equal(
+    calls[4]?.url,
+    `https://example.com/v2/internal/evidence/evidence%2F1/usage?storyId=story%2F123&packetHash=sha256%3A${"1".repeat(64)}`
+  );
+  assert.equal(
+    calls[5]?.url,
+    `https://example.com/v2/internal/sources/source%2F1/origin-cluster?storyId=story%2F123&packetHash=sha256%3A${"2".repeat(64)}`
+  );
+  for (const call of calls) {
+    const headers = call.init.headers as Record<string, string>;
+    assert.equal(headers["x-operations-token"], "ops-token-secret");
+    assert.equal(call.url.includes("ops-token-secret"), false);
+    assert.equal(call.init.cache, "no-store");
+  }
+  await assert.rejects(
+    () => client.getInternalGateOneProofGraph({ storyId: "story_123", operationsToken: " " }),
+    /operationsToken is required/
+  );
+});
+
+test("@machinesroom/api-client reads V2 agents with session auth headers", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const client = createMachineRoomApiClient({
     baseUrl: "https://example.com",
@@ -680,10 +1489,14 @@ test("@machinesroom/api-client reads V2 agents with actor auth headers", async (
   assert.equal(calls[0]?.init.cache, "no-store");
 });
 
-test("@machinesroom/api-client reads V2 agents with API-key headers", async () => {
+test("@machinesroom/api-client reads V2 agents without inherited API-key headers", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const client = createMachineRoomApiClient({
     baseUrl: "https://example.com",
+    headers: {
+      Authorization: "Bearer tmr_live_service_account_configured_bearer_should_not_send",
+      "X-API-Key": "tmr_live_service_account_configured_default_should_not_send"
+    },
     fetch: (async (url: string, init: RequestInit) => {
       calls.push({ url, init });
       return new Response(
@@ -712,19 +1525,21 @@ test("@machinesroom/api-client reads V2 agents with API-key headers", async () =
   });
 
   await client.getV2Agents({
-    apiKey: " tmr_test_service_account_agent_key_1234567890 ",
+    sessionToken: " session-token-valid-agents-service-123 ",
     requestId: "req_v2_agents_service",
     limit: 1
   });
 
   assert.equal(calls[0]?.url, "https://example.com/v2/agents?limit=1");
   const headers = calls[0]?.init.headers as Record<string, string>;
-  assert.equal(headers["x-api-key"], "tmr_test_service_account_agent_key_1234567890");
-  assert.equal(headers["x-user-session-token"], undefined);
+  assert.equal(headers["x-user-session-token"], "session-token-valid-agents-service-123");
+  assert.equal(headers["x-api-key"], undefined);
+  assert.equal(headers.Authorization, undefined);
+  assert.equal(headers["X-API-Key"], undefined);
   assert.equal(headers["x-request-id"], "req_v2_agents_service");
 });
 
-test("@machinesroom/api-client reads V2 agent detail with API-key headers", async () => {
+test("@machinesroom/api-client reads V2 agent detail with session headers", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const client = createMachineRoomApiClient({
     baseUrl: "https://example.com",
@@ -755,15 +1570,15 @@ test("@machinesroom/api-client reads V2 agent detail with API-key headers", asyn
 
   const response = await client.getV2Agent({
     botId: "bot_risk",
-    apiKey: " tmr_test_service_account_agent_key_1234567890 ",
+    sessionToken: " session-token-valid-agent-detail-123 ",
     requestId: "req_v2_agent"
   });
 
   assert.equal(response.data.agent.botId, "bot_risk");
   assert.equal(calls[0]?.url, "https://example.com/v2/agents/bot_risk");
   const headers = calls[0]?.init.headers as Record<string, string>;
-  assert.equal(headers["x-api-key"], "tmr_test_service_account_agent_key_1234567890");
-  assert.equal(headers["x-user-session-token"], undefined);
+  assert.equal(headers["x-user-session-token"], "session-token-valid-agent-detail-123");
+  assert.equal(headers["x-api-key"], undefined);
   assert.equal(headers["x-request-id"], "req_v2_agent");
 });
 
@@ -840,7 +1655,7 @@ test("@machinesroom/api-client reads V2 service-account auth sessions with API-k
   });
 
   const response = await client.getV2AuthSession({
-    apiKey: " tmr_test_service_account_api_key_1234567890 ",
+    apiKey: " tmr_live_service_account_api_key_1234567890 ",
     requestId: "req_v2_service_session"
   });
 
@@ -852,7 +1667,7 @@ test("@machinesroom/api-client reads V2 service-account auth sessions with API-k
   assert.equal(response.data.serviceAccount.id, "svc_123");
   assert.equal(calls[0]?.url, "https://example.com/v2/auth/session");
   const headers = calls[0]?.init.headers as Record<string, string>;
-  assert.equal(headers["x-api-key"], "tmr_test_service_account_api_key_1234567890");
+  assert.equal(headers["x-api-key"], "tmr_live_service_account_api_key_1234567890");
   assert.equal(headers["x-user-session-token"], undefined);
   assert.equal(headers["x-request-id"], "req_v2_service_session");
 });
@@ -903,8 +1718,8 @@ test("@machinesroom/api-client keeps stray API keys off user-session-only V2 rea
   const client = createMachineRoomApiClient({
     baseUrl: "https://example.com",
     headers: {
-      Authorization: "Bearer tmr_test_service_account_configured_bearer_should_not_send",
-      "X-API-Key": "tmr_test_service_account_configured_default_should_not_send",
+      Authorization: "Bearer tmr_live_service_account_configured_bearer_should_not_send",
+      "X-API-Key": "tmr_live_service_account_configured_default_should_not_send",
       "x-client-name": "contract-test"
     },
     fetch: (async (url: string, init: RequestInit) => {
@@ -932,7 +1747,7 @@ test("@machinesroom/api-client keeps stray API keys off user-session-only V2 rea
 
   await client.getV2Me({
     sessionToken: " session-token-valid-67890 ",
-    apiKey: " tmr_test_service_account_should_not_send ",
+    apiKey: " tmr_live_service_account_should_not_send ",
     requestId: "req_v2_me_session_only"
   } as Parameters<typeof client.getV2Me>[0] & { apiKey: string });
 
@@ -1266,8 +2081,8 @@ test("@machinesroom/api-client reads V2 organization admin resources with user-s
   const client = createMachineRoomApiClient({
     baseUrl: "https://example.com",
     headers: {
-      Authorization: "Bearer tmr_test_service_account_configured_bearer_should_not_send",
-      "X-API-Key": "tmr_test_service_account_configured_default_should_not_send",
+      Authorization: "Bearer tmr_live_service_account_configured_bearer_should_not_send",
+      "X-API-Key": "tmr_live_service_account_configured_default_should_not_send",
       "x-client-name": "contract-test"
     },
     fetch: (async (url: string, init: RequestInit) => {
@@ -1394,8 +2209,8 @@ test("@machinesroom/api-client updates V2 organization metadata with user-sessio
   const client = createMachineRoomApiClient({
     baseUrl: "https://example.com",
     headers: {
-      Authorization: "Bearer tmr_test_service_account_configured_bearer_should_not_send",
-      "X-API-Key": "tmr_test_service_account_configured_default_should_not_send",
+      Authorization: "Bearer tmr_live_service_account_configured_bearer_should_not_send",
+      "X-API-Key": "tmr_live_service_account_configured_default_should_not_send",
       "x-client-name": "contract-test"
     },
     fetch: (async (url: string, init: RequestInit) => {
@@ -1460,8 +2275,8 @@ test("@machinesroom/api-client manages V2 organization OIDC settings with user-s
   const client = createMachineRoomApiClient({
     baseUrl: "https://example.com",
     headers: {
-      Authorization: "Bearer tmr_test_service_account_configured_bearer_should_not_send",
-      "X-API-Key": "tmr_test_service_account_configured_default_should_not_send",
+      Authorization: "Bearer tmr_live_service_account_configured_bearer_should_not_send",
+      "X-API-Key": "tmr_live_service_account_configured_default_should_not_send",
       "x-client-name": "contract-test"
     },
     fetch: (async (url: string, init: RequestInit) => {
@@ -2793,7 +3608,7 @@ test("@machinesroom/api-client creates scoped V2 organization API keys", async (
             updatedAt: "2026-04-29T00:00:00.000Z",
             created: true,
             secretAvailable: true,
-            apiKey: "tmr_test_example_abcdefghijklmnopqrstuvwxyz1234567890"
+            apiKey: "tmr_live_example_abcdefghijklmnopqrstuvwxyz1234567890"
           },
           idempotency: {
             status: "created",
@@ -2819,7 +3634,7 @@ test("@machinesroom/api-client creates scoped V2 organization API keys", async (
 
   assert.equal(response.data.apiKeyId, "api_key_org_writer_new");
   assert.equal(response.data.secretAvailable, true);
-  assert.equal(response.data.apiKey, "tmr_test_example_abcdefghijklmnopqrstuvwxyz1234567890");
+  assert.equal(response.data.apiKey, "tmr_live_example_abcdefghijklmnopqrstuvwxyz1234567890");
   assert.equal(calls[0]?.url, "https://example.com/v2/organizations/org_123/api-keys");
   const headers = calls[0]?.init.headers as Record<string, string>;
   assert.equal(headers["x-user-session-token"], "session-token-valid-org-123");
@@ -2994,12 +3809,12 @@ test("@machinesroom/api-client sends service-account API keys for V2 organizatio
 
   await client.getV2OrganizationAuditEvents({
     organizationId: "org_123",
-    apiKey: " tmr_test_service_account_audit_key_1234567890 ",
+    apiKey: " tmr_live_service_account_audit_key_1234567890 ",
     requestId: "req_v2_org_audit_service"
   });
 
   const headers = calls[0]?.init.headers as Record<string, string>;
-  assert.equal(headers["x-api-key"], "tmr_test_service_account_audit_key_1234567890");
+  assert.equal(headers["x-api-key"], "tmr_live_service_account_audit_key_1234567890");
   assert.equal(headers["x-user-session-token"], undefined);
   assert.equal(headers["x-request-id"], "req_v2_org_audit_service");
 });
@@ -3261,7 +4076,7 @@ test("@machinesroom/api-client creates scoped V2 workspace API keys", async () =
             updatedAt: "2026-04-29T00:00:00.000Z",
             created: true,
             secretAvailable: true,
-            apiKey: "tmr_test_workspace_example_abcdefghijklmnopqrstuvwxyz1234567890"
+            apiKey: "tmr_live_workspace_example_abcdefghijklmnopqrstuvwxyz1234567890"
           },
           idempotency: {
             status: "created",
@@ -3289,7 +4104,7 @@ test("@machinesroom/api-client creates scoped V2 workspace API keys", async () =
   assert.equal(response.data.apiKeyId, "api_key_workspace_writer_new");
   assert.equal(response.data.workspaceId, "workspace_123");
   assert.equal(response.data.secretAvailable, true);
-  assert.equal(response.data.apiKey, "tmr_test_workspace_example_abcdefghijklmnopqrstuvwxyz1234567890");
+  assert.equal(response.data.apiKey, "tmr_live_workspace_example_abcdefghijklmnopqrstuvwxyz1234567890");
   assert.equal(calls[0]?.url, "https://example.com/v2/organizations/org_123/workspaces/workspace_123/api-keys");
   const headers = calls[0]?.init.headers as Record<string, string>;
   assert.equal(headers["x-user-session-token"], "session-token-valid-workspace-123");
@@ -3466,12 +4281,426 @@ test("@machinesroom/api-client sends service-account API keys for V2 workspace a
   await client.getV2WorkspaceAuditEvents({
     organizationId: "org_123",
     workspaceId: "workspace_123",
-    apiKey: " service_account_workspace_audit_key_1234567890 ",
+    apiKey: " tmr_live_service_account_workspace_audit_key_1234567890 ",
     requestId: "req_v2_workspace_audit_service"
   });
 
   const headers = calls[0]?.init.headers as Record<string, string>;
-  assert.equal(headers["x-api-key"], "service_account_workspace_audit_key_1234567890");
+  assert.equal(headers["x-api-key"], "tmr_live_service_account_workspace_audit_key_1234567890");
   assert.equal(headers["x-user-session-token"], undefined);
   assert.equal(headers["x-request-id"], "req_v2_workspace_audit_service");
+});
+
+test("@machinesroom/api-client sends operations tokens for Gate One V2 P4 internal orchestration", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const responses = [
+    {
+      storyId: "story-1",
+      packetId: "packet-1",
+      packetHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      publicationEffect: "NONE",
+      receipt: {
+        id: "receipt-1",
+        storyId: "story-1",
+        packetId: "packet-1",
+        packetHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        requirementId: "disclosure-1",
+        renderedArtifactHash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        renderTarget: "PUBLIC_ARTICLE",
+        renderedTextHash: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        rendererVersion: "renderer-v1",
+        verifiedAt: "2026-06-24T12:03:00.000Z"
+      }
+    },
+    {
+      storyId: "story-1",
+      packetId: "packet-1",
+      packetHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      mode: "SHADOW",
+      publicationEffect: "NONE",
+      evaluation: {
+        id: "consensus-eval:story-1:packet-1:hash",
+        storyId: "story-1",
+        packetId: "packet-1",
+        packetHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        policyVersion: "2.2.0",
+        profile: "STANDARD",
+        approved: false,
+        blocked: false,
+        targetState: "CONTESTED",
+        reasonCodes: ["LANE_SIGNERS_MISSING"],
+        selectedReviewIds: [],
+        tracePublic: {},
+        safetyDecision: "ALLOW",
+        activeLegalHold: false,
+        evaluatedAt: "2026-06-24T12:04:00.000Z"
+      },
+      outcome: {
+        schemaVersion: "2.0",
+        mode: "SHADOW",
+        publicationEffect: "NONE",
+        terminalStatus: "PENDING",
+        terminalStep: "REVIEW_ELIGIBILITY",
+        wouldAllowPublication: false,
+        reasons: [],
+        trace: {
+          trustWeightPolicyApplied: false,
+          safetyDecision: "ALLOW",
+          activeLegalHold: false
+        },
+        deterministicTraceHash: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        implementationVersion: "gate-one-v2-p4-consensus-shadow@1.0.0"
+      }
+    }
+  ];
+  const client = createMachineRoomApiClient({
+    baseUrl: "https://example.com",
+    headers: {
+      "x-api-key": "stray-service-key",
+      "x-user-session-token": "stray-session-token"
+    },
+    fetch: (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      const response = responses[calls.length - 1];
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }) as unknown as typeof fetch
+  });
+
+  const receipt = await client.verifyGateOneV2DisclosureReceipt({
+    storyId: "story-1",
+    operationsToken: " ops-token ",
+    packetHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    requirementId: "disclosure-1",
+    renderedArtifactHash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    renderTarget: "PUBLIC_ARTICLE",
+    renderedTextHash: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    rendererVersion: "renderer-v1",
+    verifiedAt: "2026-06-24T12:03:00.000Z",
+    requestId: "req_gate_one_disclosure"
+  });
+  const consensus = await client.evaluateGateOneV2Consensus({
+    storyId: "story-1",
+    operationsToken: " ops-token ",
+    packetHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    safetyDecision: "ALLOW",
+    activeLegalHold: false,
+    requestId: "req_gate_one_consensus"
+  });
+
+  assert.equal(receipt.publicationEffect, "NONE");
+  assert.equal(consensus.publicationEffect, "NONE");
+  assert.equal(calls[0]?.url, "https://example.com/v2/internal/stories/story-1/disclosures/verify");
+  assert.equal(calls[1]?.url, "https://example.com/v2/internal/stories/story-1/consensus/evaluate");
+  assert.equal(calls[0]?.init.method, "POST");
+  assert.equal(calls[1]?.init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0]?.init.body as string), {
+    packetHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    requirementId: "disclosure-1",
+    renderedArtifactHash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    renderTarget: "PUBLIC_ARTICLE",
+    renderedTextHash: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    rendererVersion: "renderer-v1",
+    verifiedAt: "2026-06-24T12:03:00.000Z"
+  });
+  assert.deepEqual(JSON.parse(calls[1]?.init.body as string), {
+    packetHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    safetyDecision: "ALLOW",
+    activeLegalHold: false
+  });
+  for (const call of calls) {
+    const headers = call.init.headers as Record<string, string>;
+    assert.equal(headers["x-operations-token"], "ops-token");
+    assert.equal(headers["x-api-key"], undefined);
+    assert.equal(headers["x-user-session-token"], undefined);
+  }
+  assert.equal((calls[0]?.init.headers as Record<string, string>)["x-request-id"], "req_gate_one_disclosure");
+  assert.equal((calls[1]?.init.headers as Record<string, string>)["x-request-id"], "req_gate_one_consensus");
+});
+
+test("@machinesroom/api-client runs Gate One V2 preflights with operations auth", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const storyId = "story-1";
+  const packetId = "packet-1";
+  const packetHash = `sha256:${"a".repeat(64)}`;
+  const buildResult = (contractId: string, digestNibble: string) => ({
+    id: `preflight:${contractId}:${digestNibble.repeat(32)}`,
+    storyId,
+    packetHash,
+    contractId,
+    contractVersion: "1.0.0",
+    policyVersion: "2.2.0",
+    verdict: "PASS",
+    checks: [
+      {
+        checkId: `${contractId.toLowerCase()}.ok`,
+        status: "PASS",
+        severity: "LOW",
+        objectRefs: [],
+        publicMessage: "Preflight check passed."
+      }
+    ],
+    requiredSpecialists: [],
+    requiredDisclosures: [],
+    deterministicInputHash: `sha256:${digestNibble.repeat(64)}`,
+    startedAt: "2026-06-24T12:00:00.000Z",
+    completedAt: "2026-06-24T12:00:01.000Z",
+    implementationVersion: "gate-one-v2-p2-preflight@1.0.0",
+    externalDependencySnapshot: {},
+    persistence: {
+      packetId,
+      runId: `run-${contractId.toLowerCase()}`
+    }
+  });
+  const response = {
+    storyId,
+    packetId,
+    packetHash,
+    promotedToCurrent: false,
+    promotionBlockedReason: "AUDIT_ONLY_DECISIONS_PRESENT",
+    satisfiedForConsensus: true,
+    missingContractIds: [],
+    failedContractIds: [],
+    requiredSpecialists: [],
+    requiredDisclosures: [],
+    results: [
+      buildResult("PACKET_INTEGRITY_V1", "1"),
+      buildResult("PUBLICATION_QA_V1", "2"),
+      buildResult("RIGHTS_ROUTING_V1", "3"),
+      buildResult("LIFECYCLE_READINESS_V1", "4")
+    ]
+  };
+  const client = createMachineRoomApiClient({
+    baseUrl: "https://example.com",
+    headers: {
+      "x-api-key": "stray-service-key",
+      "x-user-session-token": "stray-session-token"
+    },
+    fetch: (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }) as unknown as typeof fetch
+  });
+
+  const preflights = await client.runGateOneV2Preflights({
+    storyId: " story-1 ",
+    operationsToken: " ops-token ",
+    packet: { storyId: "story-1", packetHash },
+    promoteToCurrent: true,
+    requestId: "req_gate_one_preflights"
+  });
+
+  assert.equal(preflights.results.length, 4);
+  assert.equal(preflights.results[0]?.persistence.packetId, packetId);
+  assert.equal(calls[0]?.url, "https://example.com/v2/internal/stories/story-1/preflights/run");
+  assert.equal(calls[0]?.init.method, "POST");
+  assert.equal(calls[0]?.init.cache, "no-store");
+  assert.deepEqual(JSON.parse(calls[0]?.init.body as string), {
+    packet: { storyId: "story-1", packetHash },
+    promoteToCurrent: true
+  });
+  const headers = calls[0]?.init.headers as Record<string, string>;
+  assert.equal(headers["x-operations-token"], "ops-token");
+  assert.equal(headers["x-api-key"], undefined);
+  assert.equal(headers["x-user-session-token"], undefined);
+  assert.equal(headers["x-request-id"], "req_gate_one_preflights");
+});
+
+test("@machinesroom/api-client computes publish readiness with operations auth and Gate One V2 enforcement models", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const candidateHash = "a".repeat(64);
+  const packetHash = `sha256:${candidateHash}`;
+  const policyDigest = `sha256:${"b".repeat(64)}`;
+  const readinessHash = `sha256:${"c".repeat(64)}`;
+  const response = {
+    candidateHash,
+    storyId: "story-1",
+    editorialPass: true,
+    safetyDecision: "ALLOW",
+    copyrightDecision: "ALLOW",
+    gateOneV2SafetyGateHandoff: {
+      schemaVersion: "1.0",
+      mode: "SHADOW",
+      publicationEffect: "NONE",
+      status: "READY",
+      consensusEvaluationEnabled: true,
+      safetyGateEnforcedInV1: true,
+      v2SafetyGateRequired: true,
+      storyId: "story-1",
+      packetHash,
+      renderedSafetyDecision: "ALLOW",
+      consensusSafetyDecision: "ALLOW",
+      editorialPass: true,
+      safetyAllowsPublication: true,
+      v2EligibleAfterSafety: true,
+      consensusEvaluationRequest: {
+        path: "/v2/internal/stories/story-1/consensus/evaluate",
+        body: { packetHash, safetyDecision: "ALLOW" }
+      },
+      blockers: []
+    },
+    gateOneV2PublishReadiness: {
+      schemaVersion: "1.0",
+      mode: "SHADOW",
+      publicationEffect: "NONE",
+      advisoryOnly: true,
+      storyId: "story-1",
+      packetHash,
+      generatedAt: "2026-06-24T12:05:00.000Z",
+      policy: {
+        id: "gate-one-v2-mvp",
+        version: "2.2.0",
+        digest: policyDigest,
+        globalState: "ENFORCE",
+        canaryPercent: 100
+      },
+      enforcementRequested: false,
+      enforcementState: "DISABLED",
+      enforcementActive: false,
+      controlState: "NOT_READY",
+      v1Publishable: true,
+      v1Blockers: [],
+      safetyGate: { decision: "ALLOW", allowsPublication: true },
+      consensus: null,
+      wouldAllowPublicationIfPolicyEnabled: false,
+      readyForPolicyPromotion: false,
+      blockers: [
+        "gate_one_v2_consensus_enforcement_disabled",
+        "gate_one_v2_consensus_evaluation_missing"
+      ],
+      readinessHash
+    },
+    gateOneV2PublishEnforcement: {
+      schemaVersion: "1.0",
+      policy: {
+        id: "gate-one-v2-mvp",
+        version: "2.2.0",
+        digest: policyDigest,
+        globalState: "ENFORCE",
+        canaryPercent: 100
+      },
+      enforcementRequested: false,
+      enforcementActive: false,
+      mode: "DISABLED",
+      publicationEffect: "NONE",
+      canary: {
+        configuredPercent: 100,
+        cohortPercent: 42.5,
+        included: true
+      },
+      legacyPublishable: true,
+      finalPublishable: true,
+      v2ControlsSatisfied: false,
+      safetyGateAllowsPublication: true,
+      consensusAllowsPublication: false,
+      consensusPolicyMatches: false,
+      readinessHash,
+      blockers: [
+        "gate_one_v2_consensus_enforcement_disabled",
+        "gate_one_v2_consensus_evaluation_missing"
+      ]
+    },
+    publishable: true,
+    blockers: [],
+    scan: {
+      pass: "SCAN2_RENDERED",
+      hardBlock: false,
+      decisionHash: "safety-decision-hash",
+      reasons: [],
+      rationale: "SafetyGate allowed publication."
+    },
+    copyrightScan: {
+      lane: "deep",
+      decision: "ALLOW",
+      sourceCount: 2,
+      missingSourceTextCount: 0,
+      candidateSignatureCount: 10,
+      maxOverlapSignatureCount: 1,
+      maxSourceSignatureCount: 10,
+      maxOverlapRatio: 0.1,
+      rationale: ["ALLOW"]
+    }
+  };
+  const client = createMachineRoomApiClient({
+    baseUrl: "https://example.com",
+    headers: {
+      "x-api-key": "stray-service-key",
+      "x-user-session-token": "stray-session-token"
+    },
+    fetch: (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }) as unknown as typeof fetch
+  });
+
+  const compute = await client.computePublishReadiness({
+    candidateHash,
+    operationsToken: " ops-token ",
+    forceRescan: true,
+    lane: "deep",
+    requestId: "req_publish_compute"
+  });
+
+  assert.equal(compute.gateOneV2PublishReadiness.publicationEffect, "NONE");
+  assert.equal(compute.gateOneV2PublishEnforcement.enforcementActive, false);
+  assert.equal(calls[0]?.url, `https://example.com/v1/publish/${candidateHash}/compute`);
+  assert.equal(calls[0]?.init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0]?.init.body as string), {
+    forceRescan: true,
+    lane: "deep"
+  });
+  const headers = calls[0]?.init.headers as Record<string, string>;
+  assert.equal(headers["x-operations-token"], "ops-token");
+  assert.equal(headers["x-api-key"], undefined);
+  assert.equal(headers["x-user-session-token"], undefined);
+  assert.equal(headers["x-request-id"], "req_publish_compute");
+
+  const activeEnforcementResponse = {
+    ...response,
+    gateOneV2PublishEnforcement: {
+      ...response.gateOneV2PublishEnforcement,
+      policy: {
+        ...response.gateOneV2PublishEnforcement.policy,
+        globalState: "ENFORCE",
+        canaryPercent: 100
+      },
+      enforcementRequested: true,
+      enforcementActive: true,
+      mode: "ENFORCE",
+      publicationEffect: "V2_ENFORCED",
+      canary: {
+        configuredPercent: 100,
+        cohortPercent: 42.5,
+        included: true
+      },
+      finalPublishable: false,
+      consensusPolicyMatches: true,
+      blockers: ["gate_one_v2_consensus_not_allow"]
+    },
+    publishable: false,
+    blockers: ["gate_one_v2_consensus_not_allow"]
+  };
+  const activeClient = createMachineRoomApiClient({
+    baseUrl: "https://example.com",
+    fetch: (async () =>
+      new Response(JSON.stringify(activeEnforcementResponse), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      })) as unknown as typeof fetch
+  });
+  const activeCompute = await activeClient.computePublishReadiness({
+    candidateHash,
+    operationsToken: "ops-token"
+  });
+  assert.equal(activeCompute.gateOneV2PublishEnforcement.enforcementActive, true);
+  assert.equal(activeCompute.gateOneV2PublishEnforcement.mode, "ENFORCE");
+  assert.equal(activeCompute.gateOneV2PublishEnforcement.publicationEffect, "V2_ENFORCED");
 });

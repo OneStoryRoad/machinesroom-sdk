@@ -6,7 +6,7 @@ interface IERC20Minimal {
 }
 
 /// @title RewardMerkleDistributor
-/// @notice Disabled-by-default monthly reward claim distributor for reviewed MachinesRoom batches.
+/// @notice Disabled-by-default monthly reward claim distributor for reviewed batches for The Machines Room.
 /// @dev Deployment, funding, and batch creation must remain behind backend feature flags and admin review.
 contract RewardMerkleDistributor {
     error NotAdmin();
@@ -66,7 +66,9 @@ contract RewardMerkleDistributor {
         if (admin_ == address(0)) revert InvalidAdmin();
         token = IERC20Minimal(token_);
         admin = admin_;
+        paused = true;
         emit AdminTransferred(address(0), admin_);
+        emit PausedSet(true);
     }
 
     function transferAdmin(address newAdmin) external onlyAdmin {
@@ -99,7 +101,7 @@ contract RewardMerkleDistributor {
             claimedAmount: 0,
             activateAt: activateAt,
             expiresAt: expiresAt,
-            frozen: false,
+            frozen: true,
             exists: true,
             metadataURI: metadataURI
         });

@@ -31,7 +31,7 @@ class DistributorHarness {
     frozen: boolean;
   };
   private readonly claimed = new Set<string>();
-  paused = false;
+  paused = true;
 
   constructor(input: {
     merkleRoot: string;
@@ -39,6 +39,7 @@ class DistributorHarness {
     activateAt: number;
     expiresAt?: number;
     frozen?: boolean;
+    paused?: boolean;
   }) {
     this.batch = {
       merkleRoot: input.merkleRoot,
@@ -46,8 +47,9 @@ class DistributorHarness {
       claimedAmount: 0n,
       activateAt: input.activateAt,
       expiresAt: input.expiresAt ?? 0,
-      frozen: input.frozen ?? false
+      frozen: input.frozen ?? true
     };
+    this.paused = input.paused ?? true;
   }
 
   claim(input: {
@@ -86,6 +88,8 @@ test("RewardMerkleDistributor source exposes required safety controls", () => {
   assert.match(source, /error BatchFrozen/);
   assert.match(source, /error BatchInactive/);
   assert.match(source, /error BatchExpired/);
+  assert.match(source, /paused = true/);
+  assert.match(source, /frozen: true/);
   assert.match(source, /function setPaused/);
   assert.match(source, /function setBatchFrozen/);
   assert.match(source, /function claim/);
@@ -136,7 +140,7 @@ test("reward claim leaf helpers produce valid and invalid proofs deterministical
   assert.equal(verifyRewardClaimProof({ leafHash: wrongAmountLeaf, proof, merkleRoot }), false);
 });
 
-test("reward claim harness rejects double, invalid, inactive, frozen, and expired claims", () => {
+test("reward claim harness rejects default paused, default frozen, double, invalid, inactive, and expired claims", () => {
   const payoutIdsHash = hashRewardPayoutIds(["payout-a"]);
   const leaf = hashRewardClaimLeaf({
     batchId: BATCH_ID,
@@ -148,27 +152,41 @@ test("reward claim harness rejects double, invalid, inactive, frozen, and expire
   const root = buildRewardClaimMerkleRoot([leaf]);
   const proof = buildRewardClaimProof([leaf], 0);
 
+  const defaultClosed = new DistributorHarness({ merkleRoot: root, totalAmount: AMOUNT, activateAt: 100 });
+  assert.throws(
+    () => defaultClosed.claim({ now: 150, index: 0, account: ACCOUNT, amount: AMOUNT, payoutIdsHash, proof }),
+    /Paused/
+  );
+
+  const defaultBatchFrozen = new DistributorHarness({ merkleRoot: root, totalAmount: AMOUNT, activateAt: 100, paused: false });
+  assert.throws(
+    () => defaultBatchFrozen.claim({ now: 150, index: 0, account: ACCOUNT, amount: AMOUNT, payoutIdsHash, proof }),
+    /BatchFrozen/
+  );
+
   const active = new DistributorHarness({
     merkleRoot: root,
     totalAmount: AMOUNT,
     activateAt: 100,
-    expiresAt: 200
+    expiresAt: 200,
+    frozen: false,
+    paused: false
   });
   active.claim({ now: 150, index: 0, account: ACCOUNT, amount: AMOUNT, payoutIdsHash, proof });
   assert.throws(() => active.claim({ now: 150, index: 0, account: ACCOUNT, amount: AMOUNT, payoutIdsHash, proof }), /AlreadyClaimed/);
 
-  const invalidProof = new DistributorHarness({ merkleRoot: root, totalAmount: AMOUNT, activateAt: 100 });
+  const invalidProof = new DistributorHarness({ merkleRoot: root, totalAmount: AMOUNT, activateAt: 100, frozen: false, paused: false });
   assert.throws(
     () => invalidProof.claim({ now: 150, index: 0, account: OTHER_ACCOUNT, amount: AMOUNT, payoutIdsHash, proof }),
     /InvalidProof/
   );
 
-  const inactive = new DistributorHarness({ merkleRoot: root, totalAmount: AMOUNT, activateAt: 100 });
+  const inactive = new DistributorHarness({ merkleRoot: root, totalAmount: AMOUNT, activateAt: 100, frozen: false, paused: false });
   assert.throws(() => inactive.claim({ now: 99, index: 0, account: ACCOUNT, amount: AMOUNT, payoutIdsHash, proof }), /BatchInactive/);
 
-  const frozen = new DistributorHarness({ merkleRoot: root, totalAmount: AMOUNT, activateAt: 100, frozen: true });
+  const frozen = new DistributorHarness({ merkleRoot: root, totalAmount: AMOUNT, activateAt: 100, frozen: true, paused: false });
   assert.throws(() => frozen.claim({ now: 150, index: 0, account: ACCOUNT, amount: AMOUNT, payoutIdsHash, proof }), /BatchFrozen/);
 
-  const expired = new DistributorHarness({ merkleRoot: root, totalAmount: AMOUNT, activateAt: 100, expiresAt: 120 });
+  const expired = new DistributorHarness({ merkleRoot: root, totalAmount: AMOUNT, activateAt: 100, expiresAt: 120, frozen: false, paused: false });
   assert.throws(() => expired.claim({ now: 121, index: 0, account: ACCOUNT, amount: AMOUNT, payoutIdsHash, proof }), /BatchExpired/);
 });

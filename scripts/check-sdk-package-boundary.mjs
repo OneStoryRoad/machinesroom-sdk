@@ -33,11 +33,28 @@ const packages = [
         types: "./dist/agent.d.ts",
         import: "./dist/agent.js"
       },
+      "./gate-one-policy": {
+        types: "./dist/generated/gate-one-policy.generated.d.ts",
+        import: "./dist/generated/gate-one-policy.generated.js"
+      },
+      "./gate-one-proof-graph": {
+        types: "./dist/generated/gate-one-proof-graph.generated.d.ts",
+        import: "./dist/generated/gate-one-proof-graph.generated.js"
+      },
       "./package.json": {
         default: "./package.json"
       }
     },
-    requiredDist: ["index.js", "index.d.ts", "agent.js", "agent.d.ts"],
+    requiredDist: [
+      "index.js",
+      "index.d.ts",
+      "agent.js",
+      "agent.d.ts",
+      "generated/gate-one-policy.generated.js",
+      "generated/gate-one-policy.generated.d.ts",
+      "generated/gate-one-proof-graph.generated.js",
+      "generated/gate-one-proof-graph.generated.d.ts"
+    ],
     forbiddenRootImportMarkers: ['"node:crypto"', "'node:crypto'"]
   }
 ];
@@ -89,8 +106,8 @@ for (const sdkPackage of packages) {
   if (manifest.publishConfig?.registry !== "https://registry.npmjs.org/") {
     errors.push(`${label} publishConfig.registry must be https://registry.npmjs.org/`);
   }
-  if (manifest.repository?.url !== "git+https://github.com/OneStoryRoad/machinesroom-sdk.git") {
-    errors.push(`${label} repository.url must point at OneStoryRoad/machinesroom-sdk`);
+  if (manifest.repository?.url !== "git+https://github.com/OneStoryRoad/MachinesRoom.git") {
+    errors.push(`${label} repository.url must point at OneStoryRoad/MachinesRoom`);
   }
   if (manifest.repository?.directory !== sdkPackage.directory) {
     errors.push(`${label} repository.directory must be ${sdkPackage.directory}`);

@@ -1,7 +1,7 @@
 {
   "name": "@machinesroom/contracts",
-  "version": "0.1.4",
-  "description": "MachinesRoom public schemas, API contracts, and reward proof helpers.",
+  "version": "0.1.6",
+  "description": "The Machines Room public schemas, API contracts, and reward proof helpers.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -9,11 +9,11 @@
   "homepage": "https://machinesroom.com/openapi.json",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OneStoryRoad/machinesroom-sdk.git",
+    "url": "git+https://github.com/OneStoryRoad/MachinesRoom.git",
     "directory": "packages/contracts"
   },
   "bugs": {
-    "url": "https://github.com/OneStoryRoad/machinesroom-sdk/issues"
+    "url": "https://github.com/OneStoryRoad/MachinesRoom/issues"
   },
   "publishConfig": {
     "access": "public",
@@ -41,6 +41,7 @@
     "build": "tsc -p tsconfig.json && pnpm run compile:solidity",
     "compile:solidity": "node scripts/compile-reward-merkle-distributor.mjs",
     "deploy:reward-merkle": "tsx scripts/deploy-reward-merkle-distributor.ts",
+    "manage:reward-merkle": "tsx scripts/reward-merkle-operator.ts",
     "typecheck": "tsc --noEmit",
     "lint": "pnpm run typecheck",
     "test": "tsx --test tests/*.test.ts",
@@ -48,12 +49,12 @@
     "pack:dry-run": "pnpm pack --dry-run"
   },
   "dependencies": {
-    "zod": "3.24.1"
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/node": "20.19.0",
     "solc": "0.8.24",
-    "tsx": "4.21.0",
+    "tsx": "4.22.4",
     "typescript": "5.7.3",
     "viem": "2.46.3"
   }

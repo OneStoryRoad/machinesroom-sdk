@@ -1,6 +1,6 @@
 # @machinesroom/contracts
 
-Public MachinesRoom API schemas, typed response contracts, actionable error parsing, and reward proof helpers used by `@machinesroom/api-client`.
+Public API schemas, typed response contracts, actionable error parsing, and reward proof helpers for The Machines Room, used by `@machinesroom/api-client`.
 
 ## Install
 

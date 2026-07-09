@@ -1,4 +1,17 @@
 import { z } from "zod";
+export * from "./agent-capabilities.js";
+export * from "./agent-errors.js";
+export * from "./agent-guidance.js";
+export * from "./agent-release-manifest.js";
+import {
+  GATE_ONE_PREFLIGHT_CONTRACTS,
+  GateOneDisclosureRequirementSchema,
+  GateOnePreflightCheckResultSchema,
+  GateOnePreflightContractSchema,
+  GateOnePreflightVerdictSchema,
+  GateOnePublicProofGraphSchema,
+  GateOneSpecialistRequirementSchema
+} from "./governance/gate-one/index.js";
 export {
   buildRewardMerkleDistributorDeployPlan,
   RewardMerkleDeployModeSchema,
@@ -8,6 +21,14 @@ export {
   type RewardMerkleDeployPlan,
   type RewardMerkleDistributorArtifact
 } from "./reward-merkle-deploy.js";
+export {
+  buildRewardMerkleOperatorPlan,
+  RewardMerkleOperatorActionSchema,
+  type RewardMerkleOperatorAction,
+  type RewardMerkleOperatorManifest,
+  type RewardMerkleOperatorPlan,
+  type RewardMerkleOperatorPlanInput
+} from "./reward-merkle-ops.js";
 export {
   buildRewardClaimMerkleRoot,
   buildRewardClaimProof,
@@ -23,9 +44,13 @@ export {
   type RewardClaimLeafInput,
   type RewardClaimProofNode
 } from "./reward-merkle-distributor.js";
+export * from "./governance/gate-one/index.js";
 
 export const RequestIdSchema = z.string().trim().min(1).max(128);
 export type RequestId = z.infer<typeof RequestIdSchema>;
+
+export const SupportedLanguageSchema = z.enum(["en", "es", "fr", "de", "zh-Hans"]);
+export type SupportedLanguage = z.infer<typeof SupportedLanguageSchema>;
 
 export const ApiErrorSchema = z.object({
   error: z.object({
@@ -116,6 +141,37 @@ function isSmallEnoughJsonObject(value: JsonObject): boolean {
   } catch {
     return false;
   }
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort((a, b) => a.localeCompare(b));
+  const parts: string[] = [];
+  for (const key of keys) {
+    const next = obj[key];
+    if (next === undefined) continue;
+    parts.push(`${JSON.stringify(key)}:${stableStringify(next)}`);
+  }
+  return `{${parts.join(",")}}`;
+}
+
+function isHttpOrHttpsUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+export function isMachineRoomSafePublicLinkUrl(value: string): boolean {
+  return isHttpOrHttpsUrl(value);
 }
 
 export const RequestContextSchema = z.object({
@@ -1184,9 +1240,6 @@ export type PaginatedResult<T> = {
   nextCursor?: string;
 };
 
-export const SupportedLanguageSchema = z.enum(["en", "es", "fr", "de", "zh-Hans"]);
-export type SupportedLanguage = z.infer<typeof SupportedLanguageSchema>;
-
 export const TranslationMetadataSchema = z
   .object({
     requestedLanguage: SupportedLanguageSchema,
@@ -1221,17 +1274,354 @@ export const EditorialStateSchema = z.enum(["PROVISIONAL", "CONTESTED", "UNDER_R
 export const PromotionStateSchema = z.enum(["PROVISIONAL", "GRADUATED", "SUPPRESSED"]);
 export const StoryPublicationStageSchema = z.enum(["CANDIDATE", "PROVISIONAL", "GRADUATED"]);
 export const StoryReviewStatusSchema = z.enum(["EMERGING", "CLEAR", "CONTESTED", "UNDER_REVIEW", "RETRACTED"]);
+export const MachineRoomArticleTypeSchema = z.enum([
+  "brief",
+  "news",
+  "analysis",
+  "explainer",
+  "interview",
+  "opinion",
+  "live",
+  "research"
+]);
 
 export type StoryState = z.infer<typeof StoryStateSchema>;
 export type EditorialState = z.infer<typeof EditorialStateSchema>;
 export type PromotionState = z.infer<typeof PromotionStateSchema>;
 export type StoryPublicationStage = z.infer<typeof StoryPublicationStageSchema>;
 export type StoryReviewStatus = z.infer<typeof StoryReviewStatusSchema>;
+export type MachineRoomArticleType = z.infer<typeof MachineRoomArticleTypeSchema>;
+
+const MACHINE_ROOM_ARTICLE_DOCUMENT_SERIALIZED_BYTE_LIMIT = 300_000;
+export const MachineRoomArticleDocumentSchemaVersion = 1 as const;
+export const MachineRoomPublicLinkUrlSchema = z.string().url().max(2048).refine(isMachineRoomSafePublicLinkUrl, {
+  message: "URL must use http:// or https://"
+});
+const MachineRoomArticleSourceRefsSchema = z.array(z.string().trim().min(1).max(500)).min(1).max(20).optional();
+const MachineRoomArticleFirstPartyImageAssetIdSchema = z
+  .string()
+  .min(1)
+  .max(2048)
+  .regex(/^\/(?!\/).{0,2046}$/, "Image assets must use a first-party root-relative path");
+
+function isMachineRoomArticleImageAssetId(value: string): boolean {
+  if (/^\/(?!\/).{0,2046}$/.test(value)) return true;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+const MachineRoomArticleImageAssetIdSchema = z
+  .string()
+  .min(1)
+  .max(2048)
+  .refine(isMachineRoomArticleImageAssetId, {
+    message: "Image assets must use a first-party root-relative path or HTTPS URL"
+  });
+
+export const MachineRoomArticleRichTextMarkSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.enum(["bold", "italic", "code"]) }).strict(),
+  z.object({ type: z.literal("link"), href: MachineRoomPublicLinkUrlSchema }).strict(),
+  z.object({ type: z.literal("claimRef"), claimId: z.string().trim().min(1).max(200) }).strict(),
+  z.object({ type: z.literal("sourceRef"), sourceKey: z.string().trim().min(1).max(500) }).strict()
+]);
+
+export const MachineRoomArticleRichTextSpanSchema = z
+  .object({
+    text: z.string().max(10_000),
+    marks: z.array(MachineRoomArticleRichTextMarkSchema).max(12).optional()
+  })
+  .strict()
+  .refine((span) => span.text.trim().length > 0, { message: "text span must contain visible text" });
+
+export const MachineRoomArticleRichTextSchema = z.array(MachineRoomArticleRichTextSpanSchema).min(1).max(200);
+
+function buildMachineRoomArticleBlockSchema(imageAssetIdSchema: z.ZodType<string>) {
+  return z.discriminatedUnion("type", [
+    z
+      .object({
+        type: z.literal("heading"),
+        level: z.union([z.literal(2), z.literal(3)]),
+        text: MachineRoomArticleRichTextSchema
+      })
+      .strict(),
+    z.object({ type: z.literal("paragraph"), text: MachineRoomArticleRichTextSchema }).strict(),
+    z
+      .object({
+        type: z.literal("list"),
+        style: z.enum(["bullet", "number"]),
+        items: z.array(MachineRoomArticleRichTextSchema).min(1).max(100)
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("quote"),
+        text: MachineRoomArticleRichTextSchema,
+        attribution: z.string().max(500).optional(),
+        sourceRefs: MachineRoomArticleSourceRefsSchema
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("image"),
+        assetId: imageAssetIdSchema,
+        alt: z.string().min(1).max(500),
+        caption: MachineRoomArticleRichTextSchema.optional(),
+        sourceRefs: MachineRoomArticleSourceRefsSchema
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("embed"),
+        provider: z.enum(["youtube", "x", "world", "url"]),
+        url: MachineRoomPublicLinkUrlSchema,
+        caption: MachineRoomArticleRichTextSchema.optional()
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("table"),
+        columns: z.array(z.string().min(1).max(200)).min(1).max(12),
+        rows: z.array(z.array(z.string().max(2000)).min(1).max(12)).min(1).max(100),
+        sourceRefs: MachineRoomArticleSourceRefsSchema
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("timeline"),
+        events: z
+          .array(
+            z
+              .object({
+                date: z.string().min(1).max(100),
+                text: MachineRoomArticleRichTextSchema,
+                sourceRefs: MachineRoomArticleSourceRefsSchema
+              })
+              .strict()
+          )
+          .min(1)
+          .max(100)
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("factBox"),
+        title: z.string().min(1).max(300),
+        items: z.array(MachineRoomArticleRichTextSchema).min(1).max(100),
+        sourceRefs: MachineRoomArticleSourceRefsSchema
+      })
+      .strict(),
+    z
+      .object({
+        type: z.literal("callout"),
+        tone: z.enum(["context", "risk", "update", "correction"]),
+        text: MachineRoomArticleRichTextSchema
+      })
+      .strict()
+  ]);
+}
+
+export const MachineRoomArticleBlockSchema = buildMachineRoomArticleBlockSchema(MachineRoomArticleImageAssetIdSchema);
+export const MachineRoomArticleWriteBlockSchema = buildMachineRoomArticleBlockSchema(MachineRoomArticleFirstPartyImageAssetIdSchema);
+
+export const MachineRoomArticleDocumentV1Schema = z
+  .object({
+    schemaVersion: z.literal(MachineRoomArticleDocumentSchemaVersion),
+    blocks: z.array(MachineRoomArticleBlockSchema).min(1).max(500)
+  })
+  .strict()
+  .superRefine((document, context) => {
+    const serializedBytes = jsonUtf8Encoder.encode(stableStringify(document)).byteLength;
+    if (serializedBytes > MACHINE_ROOM_ARTICLE_DOCUMENT_SERIALIZED_BYTE_LIMIT) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "article document exceeds 300KB"
+      });
+    }
+  });
+
+export const MachineRoomArticleDocumentSchema = MachineRoomArticleDocumentV1Schema;
+
+export const MachineRoomArticleWriteDocumentV1Schema = z
+  .object({
+    schemaVersion: z.literal(MachineRoomArticleDocumentSchemaVersion),
+    blocks: z.array(MachineRoomArticleWriteBlockSchema).min(1).max(500)
+  })
+  .strict()
+  .superRefine((document, context) => {
+    const serializedBytes = jsonUtf8Encoder.encode(stableStringify(document)).byteLength;
+    if (serializedBytes > MACHINE_ROOM_ARTICLE_DOCUMENT_SERIALIZED_BYTE_LIMIT) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "article document exceeds 300KB"
+      });
+    }
+  });
+
+export const MachineRoomArticleWriteDocumentSchema = MachineRoomArticleWriteDocumentV1Schema;
+
+export const StoryArticleDocumentSchema = z
+  .object({
+    schemaVersion: z.literal(MachineRoomArticleDocumentSchemaVersion),
+    articleType: MachineRoomArticleTypeSchema,
+    dek: z.string().min(1).optional(),
+    revisionHash: z.string().min(1),
+    document: MachineRoomArticleDocumentV1Schema,
+    updatedAt: z.string().min(1)
+  })
+  .strict();
+
+export type MachineRoomArticleRichTextMark = z.infer<typeof MachineRoomArticleRichTextMarkSchema>;
+export type MachineRoomArticleRichTextSpan = z.infer<typeof MachineRoomArticleRichTextSpanSchema>;
+export type MachineRoomArticleRichText = z.infer<typeof MachineRoomArticleRichTextSchema>;
+export type MachineRoomArticleBlock = z.infer<typeof MachineRoomArticleBlockSchema>;
+export type MachineRoomArticleWriteBlock = z.infer<typeof MachineRoomArticleWriteBlockSchema>;
+export type MachineRoomArticleDocumentV1 = z.infer<typeof MachineRoomArticleDocumentV1Schema>;
+export type MachineRoomArticleWriteDocumentV1 = z.infer<typeof MachineRoomArticleWriteDocumentV1Schema>;
+export type StoryArticleDocument = z.infer<typeof StoryArticleDocumentSchema>;
+
+export function validateMachineRoomArticleDocumentReferences(input: {
+  document: MachineRoomArticleDocumentV1;
+  claimKeys: Iterable<string>;
+  sourceKeys: Iterable<string>;
+}): string[] {
+  const claimKeys = new Set([...input.claimKeys].map((item) => item.trim()).filter(Boolean));
+  const sourceKeys = new Set([...input.sourceKeys].map((item) => item.trim()).filter(Boolean));
+  const errors: string[] = [];
+
+  function checkRichText(text: MachineRoomArticleRichText, location: string) {
+    for (const [spanIndex, span] of text.entries()) {
+      for (const mark of span.marks ?? []) {
+        if (mark.type === "claimRef" && !claimKeys.has(mark.claimId)) {
+          errors.push(`${location}.text[${spanIndex}] references unknown claimId '${mark.claimId}'`);
+        }
+        if (mark.type === "sourceRef" && !sourceKeys.has(mark.sourceKey)) {
+          errors.push(`${location}.text[${spanIndex}] references unknown sourceKey '${mark.sourceKey}'`);
+        }
+      }
+    }
+  }
+
+  function checkSourceRefs(sourceRefs: string[] | undefined, location: string) {
+    for (const sourceRef of sourceRefs ?? []) {
+      if (!sourceKeys.has(sourceRef)) {
+        errors.push(`${location} references unknown sourceKey '${sourceRef}'`);
+      }
+    }
+  }
+
+  for (const [blockIndex, block] of input.document.blocks.entries()) {
+    const location = `blocks[${blockIndex}]`;
+    switch (block.type) {
+      case "heading":
+      case "paragraph":
+      case "callout":
+        checkRichText(block.text, location);
+        break;
+      case "list":
+        block.items.forEach((item, itemIndex) => checkRichText(item, `${location}.items[${itemIndex}]`));
+        break;
+      case "quote":
+        checkRichText(block.text, location);
+        checkSourceRefs(block.sourceRefs, `${location}.sourceRefs`);
+        break;
+      case "image":
+        if (block.caption) checkRichText(block.caption, `${location}.caption`);
+        checkSourceRefs(block.sourceRefs, `${location}.sourceRefs`);
+        break;
+      case "embed":
+        if (block.caption) checkRichText(block.caption, `${location}.caption`);
+        break;
+      case "table":
+        checkSourceRefs(block.sourceRefs, `${location}.sourceRefs`);
+        break;
+      case "timeline":
+        block.events.forEach((event, eventIndex) => {
+          checkRichText(event.text, `${location}.events[${eventIndex}]`);
+          checkSourceRefs(event.sourceRefs, `${location}.events[${eventIndex}].sourceRefs`);
+        });
+        break;
+      case "factBox":
+        block.items.forEach((item, itemIndex) => checkRichText(item, `${location}.items[${itemIndex}]`));
+        checkSourceRefs(block.sourceRefs, `${location}.sourceRefs`);
+        break;
+    }
+  }
+
+  return errors;
+}
+
+export const MachineRoomAgentCandidateClaimSchema = z.object({
+  id: z.string().min(1).max(200).optional(),
+  text: z.string().min(1).max(5000),
+  citations: z.array(z.string().min(1).max(500)).min(1).max(20)
+});
+
+export const MachineRoomAgentCandidateSourceSchema = z.object({
+  sourceKey: z.string().min(1).max(200).optional(),
+  sourceName: z.string().min(1).max(200).optional(),
+  url: z.string().url().max(2048).refine(isMachineRoomSafePublicLinkUrl, {
+    message: "url must use http:// or https://"
+  }),
+  title: z.string().min(1).max(500).optional(),
+  excerpt: z.string().max(5000).optional(),
+  publishedAt: z.string().datetime().optional()
+});
+
+export const MachineRoomAgentCandidateExternalReferenceSchema = z
+  .object({
+    id: z.string().min(1).max(200).optional(),
+    url: z
+      .string()
+      .url()
+      .max(2048)
+      .refine(isMachineRoomSafePublicLinkUrl, {
+        message: "url must use http:// or https://"
+      })
+      .optional()
+  })
+  .strict();
+
+export const MachineRoomAgentCandidateCreateRequestSchema = z
+  .object({
+    botId: z.string().min(1).max(2048),
+    verified: z.boolean().optional(),
+    linkedHumanId: z.string().min(1).max(200).optional(),
+    room: z.string().min(1).max(120),
+    language: SupportedLanguageSchema,
+    articleType: MachineRoomArticleTypeSchema.optional(),
+    title: z.string().min(1).max(500),
+    dek: z.string().min(1).max(1000).optional(),
+    summary: z.array(z.string().min(1).max(500)).min(1).max(10),
+    article: MachineRoomArticleWriteDocumentSchema.optional(),
+    claims: z.array(MachineRoomAgentCandidateClaimSchema).min(1).max(50),
+    sources: z.array(MachineRoomAgentCandidateSourceSchema).min(1).max(50),
+    lane: z.enum(["breaking", "standard", "deep"]).optional(),
+    externalReference: MachineRoomAgentCandidateExternalReferenceSchema.optional()
+  })
+  .strict();
+
+export type MachineRoomAgentCandidateClaim = z.infer<typeof MachineRoomAgentCandidateClaimSchema>;
+export type MachineRoomAgentCandidateSource = z.infer<typeof MachineRoomAgentCandidateSourceSchema>;
+export type MachineRoomAgentCandidateExternalReference = z.infer<
+  typeof MachineRoomAgentCandidateExternalReferenceSchema
+>;
+export type MachineRoomAgentCandidateCreateRequest = z.infer<typeof MachineRoomAgentCandidateCreateRequestSchema>;
 
 export const ModuleItemSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
   href: z.string().min(1)
+});
+
+export const PublicReadStatusSchema = z.object({
+  degraded: z.boolean(),
+  reason: z.literal("api_unavailable"),
+  upstreamPath: z.string().min(1),
+  httpStatus: z.number().int().positive().optional()
 });
 
 export const HomeResponseSchema = z.object({
@@ -1244,11 +1634,16 @@ export const HomeResponseSchema = z.object({
     underReview: z.array(ModuleItemSchema),
     ledger: z.array(ModuleItemSchema),
     rewardWindow: z.array(ModuleItemSchema)
-  })
+  }),
+  publicReadStatus: PublicReadStatusSchema.optional()
 });
 
 export type ModuleItem = z.infer<typeof ModuleItemSchema>;
+export type PublicReadStatus = z.infer<typeof PublicReadStatusSchema>;
 export type HomeResponse = z.infer<typeof HomeResponseSchema>;
+
+export const RewardsRibbonStateSchema = z.enum(["inactive", "active", "achieved"]);
+export type RewardsRibbonState = z.infer<typeof RewardsRibbonStateSchema>;
 
 export const FeedItemSchema = z.object({
   storyId: z.string().min(1),
@@ -1264,10 +1659,13 @@ export const FeedItemSchema = z.object({
   updatedAt: z.string().min(1),
   summary: z.array(z.string()),
   sourceCount: z.number().int().nonnegative(),
+  rewardsRibbonState: RewardsRibbonStateSchema.optional(),
   translation: TranslationMetadataSchema.optional()
 });
 
-export const FeedResponseSchema = paginatedResultSchema(FeedItemSchema);
+export const FeedResponseSchema = paginatedResultSchema(FeedItemSchema).extend({
+  publicReadStatus: PublicReadStatusSchema.optional()
+});
 
 export type FeedItem = z.infer<typeof FeedItemSchema>;
 export type FeedResponse = z.infer<typeof FeedResponseSchema>;
@@ -1290,6 +1688,13 @@ export const StoryDetailSchema = z.object({
   room: RoomIdSchema,
   language: z.string().min(1),
   summary: z.array(z.string()),
+  claimReferences: z.array(z.object({
+    id: z.string().min(1),
+    key: z.string().min(1).optional(),
+    text: z.string().min(1)
+  })).optional(),
+  rewardsRibbonState: RewardsRibbonStateSchema.optional(),
+  article: StoryArticleDocumentSchema.optional(),
   translation: TranslationMetadataSchema.optional()
 });
 
@@ -1303,6 +1708,7 @@ export const StoryVersionSchema = z.object({
   revisionHash: z.string().min(1).optional(),
   packetId: z.string().min(1).optional(),
   packetHash: z.string().min(1).optional(),
+  gateOneV2PublicTrustReceiptEligible: z.boolean().optional(),
   revisionEpoch: z.number().int().nonnegative().optional(),
   materiality: z.string().min(1).optional(),
   applyMode: z.string().min(1).optional(),
@@ -1320,6 +1726,854 @@ export const StoryVersionsResponseSchema = z.object({
 export type StoryVersion = z.infer<typeof StoryVersionSchema>;
 export type StoryVersionsResponse = z.infer<typeof StoryVersionsResponseSchema>;
 
+const GateOneV2ShadowAdvisoryLaneSchema = z
+  .object({
+    lane: z.enum(["FAIRNESS_REPLY", "PROVENANCE_AUTH", "EDITORIAL_INTEGRITY"]),
+    runId: z.string().min(1),
+    mode: z.literal("SHADOW"),
+    policyVersion: z.string().min(1),
+    policyDigest: z.string().min(1),
+    rubricVersion: z.string().min(1),
+    verdict: z.enum(["PASS", "PASS_WITH_DISCLOSURE", "REVISE", "QUARANTINE", "BLOCK", "UNAVAILABLE"]),
+    deterministicInputHash: z.string().min(1),
+    implementationVersion: z.string().min(1),
+    publicRationale: z.string(),
+    requiredDisclosureIds: z.array(z.string()),
+    requiredSpecialistTypes: z.array(z.enum(["LEGAL_RIGHTS", "DOMAIN_EXPERT", "VISUAL_FORENSICS", "LOCAL_LANGUAGE_CONTEXT", "DATA_METHODOLOGY"])),
+    checks: z.array(
+      z
+        .object({
+          checkId: z.string().min(1),
+          status: z.string().min(1),
+          severity: z.string().min(1),
+          claimIds: z.array(z.string()),
+          evidenceIds: z.array(z.string()),
+          objectRefs: z.array(z.string()),
+          publicRationale: z.string(),
+          requiredAction: z.string().min(1).optional(),
+          requiredDisclosureIds: z.array(z.string()),
+          requiredSpecialistTypes: z.array(z.string())
+        })
+        .strict()
+    ),
+    createdAt: z.string().min(1)
+  })
+  .strict();
+
+export const GateOneV2ShadowAdvisoryReceiptSchema = z
+  .object({
+    schemaVersion: z.literal("1.0"),
+    advisoryOnly: z.literal(true),
+    redactionVersion: z.literal("gate-one-v2-shadow-advisory-public-v1"),
+    storyId: z.string().min(1),
+    packetId: z.string().min(1),
+    packetHash: z.string().min(1),
+    generatedAt: z.string().min(1),
+    publicationEffect: z.literal("NONE"),
+    lanes: z.array(GateOneV2ShadowAdvisoryLaneSchema),
+    receiptHash: z.string().regex(/^sha256:[a-f0-9]{64}$/)
+  })
+  .strict();
+
+export type GateOneV2ShadowAdvisoryReceipt = z.infer<typeof GateOneV2ShadowAdvisoryReceiptSchema>;
+
+export const GateOneV2ConsensusReceiptSchema = z
+  .object({
+    schemaVersion: z.literal("1.0"),
+    advisoryOnly: z.literal(true),
+    redactionVersion: z.literal("gate-one-v2-consensus-public-v1"),
+    storyId: z.string().min(1),
+    packetId: z.string().min(1),
+    packetHash: z.string().min(1),
+    generatedAt: z.string().min(1),
+    publicationEffect: z.literal("NONE"),
+    consensus: z
+      .object({
+        evaluationId: z.string().min(1),
+        mode: z.literal("SHADOW"),
+        policyVersion: z.string().min(1),
+        policyDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+        profile: z.string().min(1),
+        terminalStatus: z.enum(["WOULD_ALLOW", "PENDING", "BLOCKED"]),
+        terminalStep: z.enum([
+          "PACKET_CURRENTNESS",
+          "POLICY_VERSION",
+          "PREFLIGHTS",
+          "SPECIALIST_REQUIREMENTS",
+          "REVIEW_ELIGIBILITY",
+          "DISCLOSURE_RECEIPTS",
+          "INDEPENDENCE",
+          "HARD_VERDICTS",
+          "ROLE_COUNTS",
+          "OWNER_DIVERSITY",
+          "TRUST_WEIGHTS",
+          "HOLDS",
+          "SAFETY_GATE",
+          "PUBLIC_BLOCKED",
+          "PUBLIC_PENDING",
+          "WOULD_ALLOW"
+        ]),
+        wouldAllowPublication: z.boolean(),
+        approved: z.boolean(),
+        blocked: z.boolean(),
+        targetState: z.string().min(1),
+        reasonCodes: z.array(z.string().min(1)),
+        selectedReviewCount: z.number().int().nonnegative(),
+        safetyDecision: z.enum(["ALLOW", "BLOCK", "QUARANTINE", "UNAVAILABLE"]).optional(),
+        activeLegalHold: z.boolean(),
+        trustWeightPolicyApplied: z.boolean(),
+        approvalWeight: z.number().nonnegative().optional(),
+        requiredApprovalWeight: z.number().nonnegative().optional(),
+        trustWeightSatisfied: z.boolean().optional(),
+        deterministicTraceHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+        implementationVersion: z.string().min(1),
+        evaluatedAt: z.string().min(1)
+      })
+      .strict(),
+    receiptHash: z.string().regex(/^sha256:[a-f0-9]{64}$/)
+  })
+  .strict();
+
+export type GateOneV2ConsensusReceipt = z.infer<typeof GateOneV2ConsensusReceiptSchema>;
+
+const Sha256DigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+const Sha256HexSchema = z.string().regex(/^[a-f0-9]{64}$/i);
+const GateOneV2PolicyGlobalStateSchema = z.enum(["DISABLED", "OBSERVE", "SHADOW", "WARN", "ENFORCE"]);
+const GateOneV2SafetyDecisionSchema = z.enum(["ALLOW", "BLOCK", "QUARANTINE", "UNAVAILABLE"]);
+const GateOneV2PublicationEffectSchema = z.literal("NONE");
+const GateOneV2PublishEnforcementEffectSchema = z.enum(["NONE", "V2_ENFORCED"]);
+
+export const PublishComputeRequestSchema = z
+  .object({
+    forceRescan: z.boolean().optional(),
+    lane: z.enum(["breaking", "standard", "deep"]).optional()
+  })
+  .strict();
+
+export const GateOneV2SafetyGateHandoffSchema = z
+  .object({
+    schemaVersion: z.literal("1.0"),
+    mode: z.literal("SHADOW"),
+    publicationEffect: GateOneV2PublicationEffectSchema,
+    status: z.enum(["DISABLED", "READY", "UNAVAILABLE"]),
+    consensusEvaluationEnabled: z.boolean(),
+    safetyGateEnforcedInV1: z.boolean(),
+    v2SafetyGateRequired: z.literal(true),
+    storyId: z.string().min(1),
+    packetHash: Sha256DigestSchema,
+    renderedSafetyDecision: GateOneV2SafetyDecisionSchema,
+    consensusSafetyDecision: GateOneV2SafetyDecisionSchema,
+    editorialPass: z.boolean(),
+    safetyAllowsPublication: z.boolean(),
+    v2EligibleAfterSafety: z.boolean(),
+    consensusEvaluationRequest: z
+      .object({
+        path: z.string().min(1),
+        body: z
+          .object({
+            packetHash: Sha256DigestSchema,
+            safetyDecision: GateOneV2SafetyDecisionSchema
+          })
+          .strict()
+      })
+      .strict(),
+    blockers: z.array(z.string().min(1))
+  })
+  .strict();
+
+export const GateOneV2PublishReadinessSchema = z
+  .object({
+    schemaVersion: z.literal("1.0"),
+    mode: z.literal("SHADOW"),
+    publicationEffect: GateOneV2PublicationEffectSchema,
+    advisoryOnly: z.literal(true),
+    storyId: z.string().min(1),
+    packetHash: Sha256DigestSchema,
+    generatedAt: z.string().datetime(),
+    policy: z
+      .object({
+        id: z.literal("gate-one-v2-mvp"),
+        version: z.string().min(1),
+        digest: Sha256DigestSchema,
+        globalState: GateOneV2PolicyGlobalStateSchema,
+        canaryPercent: z.number().min(0).max(100)
+      })
+      .strict(),
+    enforcementRequested: z.boolean(),
+    enforcementState: z.enum(["DISABLED", "REQUESTED_BUT_BLOCKED", "READY_FOR_ENFORCEMENT"]),
+    enforcementActive: z.literal(false),
+    controlState: z.enum(["READY", "NOT_READY"]),
+    v1Publishable: z.boolean(),
+    v1Blockers: z.array(z.string().min(1)),
+    safetyGate: z
+      .object({
+        decision: GateOneV2SafetyDecisionSchema,
+        allowsPublication: z.boolean()
+      })
+      .strict(),
+    consensus: z
+      .object({
+        receiptHash: Sha256DigestSchema,
+        evaluationId: z.string().min(1),
+        policyVersion: z.string().min(1),
+        policyDigest: Sha256DigestSchema,
+        terminalStatus: z.enum(["WOULD_ALLOW", "PENDING", "BLOCKED"]),
+        terminalStep: z.enum([
+          "PACKET_CURRENTNESS",
+          "POLICY_VERSION",
+          "PREFLIGHTS",
+          "SPECIALIST_REQUIREMENTS",
+          "REVIEW_ELIGIBILITY",
+          "DISCLOSURE_RECEIPTS",
+          "INDEPENDENCE",
+          "HARD_VERDICTS",
+          "ROLE_COUNTS",
+          "OWNER_DIVERSITY",
+          "TRUST_WEIGHTS",
+          "HOLDS",
+          "SAFETY_GATE",
+          "PUBLIC_BLOCKED",
+          "PUBLIC_PENDING",
+          "WOULD_ALLOW"
+        ]),
+        wouldAllowPublication: z.boolean(),
+        approved: z.boolean(),
+        blocked: z.boolean(),
+        targetState: z.string().min(1),
+        reasonCodes: z.array(z.string().min(1)),
+        selectedReviewCount: z.number().int().nonnegative(),
+        safetyDecision: GateOneV2SafetyDecisionSchema.optional(),
+        activeLegalHold: z.boolean(),
+        trustWeightPolicyApplied: z.boolean(),
+        trustWeightSatisfied: z.boolean().optional(),
+        evaluatedAt: z.string().datetime()
+      })
+      .strict()
+      .nullable(),
+    wouldAllowPublicationIfPolicyEnabled: z.boolean(),
+    readyForPolicyPromotion: z.boolean(),
+    blockers: z.array(z.string().min(1)),
+    readinessHash: Sha256DigestSchema
+  })
+  .strict();
+
+export const GateOneV2PublishEnforcementSchema = z
+  .object({
+    schemaVersion: z.literal("1.0"),
+    policy: z
+      .object({
+        id: z.literal("gate-one-v2-mvp"),
+        version: z.string().min(1),
+        digest: Sha256DigestSchema,
+        globalState: GateOneV2PolicyGlobalStateSchema,
+        canaryPercent: z.number().min(0).max(100)
+      })
+      .strict(),
+    enforcementRequested: z.boolean(),
+    enforcementActive: z.boolean(),
+    mode: z.enum(["DISABLED", "REQUESTED_BUT_BLOCKED", "ENFORCE"]),
+    publicationEffect: GateOneV2PublishEnforcementEffectSchema,
+    canary: z
+      .object({
+        configuredPercent: z.number().min(0).max(100),
+        cohortPercent: z.number().min(0).max(100),
+        included: z.boolean()
+      })
+      .strict(),
+    legacyPublishable: z.boolean(),
+    finalPublishable: z.boolean(),
+    v2ControlsSatisfied: z.boolean(),
+    safetyGateAllowsPublication: z.boolean(),
+    consensusAllowsPublication: z.boolean(),
+    consensusPolicyMatches: z.boolean(),
+    readinessHash: Sha256DigestSchema,
+    blockers: z.array(z.string().min(1))
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const expectedV2ControlsSatisfied = value.safetyGateAllowsPublication && value.consensusAllowsPublication;
+    if (value.v2ControlsSatisfied !== expectedV2ControlsSatisfied) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["v2ControlsSatisfied"],
+        message: "Gate One V2 publish enforcement controls must equal SafetyGate plus consensus allow decisions"
+      });
+    }
+    if (value.consensusAllowsPublication && !value.consensusPolicyMatches) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["consensusPolicyMatches"],
+        message: "Gate One V2 consensus cannot allow publication under a mismatched policy"
+      });
+    }
+    if (value.canary.configuredPercent !== value.policy.canaryPercent) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["canary", "configuredPercent"],
+        message: "Gate One V2 publish enforcement canary must match the policy canary"
+      });
+    }
+    const expectedCanaryIncluded =
+      value.canary.configuredPercent >= 100
+        || (value.canary.configuredPercent > 0 && value.canary.cohortPercent < value.canary.configuredPercent);
+    if (value.canary.included !== expectedCanaryIncluded) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["canary", "included"],
+        message: "Gate One V2 publish enforcement canary inclusion must match the configured rollout"
+      });
+    }
+    const stopPublishBlocked = value.blockers.includes("stop_publish_enabled");
+    const expectedFinalPublishable = value.enforcementActive
+      ? value.legacyPublishable && value.v2ControlsSatisfied && !stopPublishBlocked
+      : value.legacyPublishable;
+    if (value.finalPublishable !== expectedFinalPublishable) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["finalPublishable"],
+        message: "Gate One V2 publish enforcement finalPublishable must match the enforced decision model"
+      });
+    }
+    if (value.enforcementActive) {
+      if (!value.enforcementRequested) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["enforcementRequested"],
+          message: "active Gate One V2 publish enforcement requires enforcementRequested=true"
+        });
+      }
+      if (value.mode !== "ENFORCE") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["mode"],
+          message: "active Gate One V2 publish enforcement requires mode=ENFORCE"
+        });
+      }
+      if (value.publicationEffect !== "V2_ENFORCED") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["publicationEffect"],
+          message: "active Gate One V2 publish enforcement requires publicationEffect=V2_ENFORCED"
+        });
+      }
+      if (value.policy.globalState !== "ENFORCE") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["policy", "globalState"],
+          message: "active Gate One V2 publish enforcement requires policy.globalState=ENFORCE"
+        });
+      }
+      if (value.policy.canaryPercent <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["policy", "canaryPercent"],
+          message: "active Gate One V2 publish enforcement requires a positive policy canary"
+        });
+      }
+      if (!value.canary.included) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["canary", "included"],
+          message: "active Gate One V2 publish enforcement requires canary inclusion"
+        });
+      }
+      if (value.finalPublishable && value.blockers.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["blockers"],
+          message: "active publishable Gate One V2 enforcement cannot carry blockers"
+        });
+      }
+      if (!value.finalPublishable && value.blockers.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["blockers"],
+          message: "active non-publishable Gate One V2 enforcement requires blockers"
+        });
+      }
+      if (!value.legacyPublishable && !value.blockers.includes("v1_publish_not_ready")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["blockers"],
+          message: "active Gate One V2 enforcement with a failed legacy gate requires v1_publish_not_ready"
+        });
+      }
+      if (!value.safetyGateAllowsPublication && !value.blockers.includes("safety_gate_not_allow")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["blockers"],
+          message: "active Gate One V2 enforcement with a failed SafetyGate requires safety_gate_not_allow"
+        });
+      }
+      if (
+        !value.consensusPolicyMatches
+        && !value.blockers.includes("gate_one_v2_consensus_policy_mismatch")
+        && !value.blockers.includes("gate_one_v2_consensus_evaluation_missing")
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["blockers"],
+          message: "active Gate One V2 enforcement with a missing or stale consensus evaluation requires a consensus policy blocker"
+        });
+      }
+      if (
+        !value.consensusAllowsPublication
+        && !value.blockers.includes("gate_one_v2_consensus_not_allow")
+        && !value.blockers.includes("gate_one_v2_consensus_evaluation_missing")
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["blockers"],
+          message: "active Gate One V2 enforcement with a failed consensus decision requires a consensus blocker"
+        });
+      }
+      return;
+    }
+    if (value.mode === "ENFORCE") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["mode"],
+        message: "inactive Gate One V2 publish enforcement cannot report mode=ENFORCE"
+      });
+    }
+    if (value.publicationEffect !== "NONE") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["publicationEffect"],
+        message: "inactive Gate One V2 publish enforcement must report publicationEffect=NONE"
+      });
+    }
+  });
+
+export const PublishComputeResponseSchema = z
+  .object({
+    candidateHash: Sha256HexSchema,
+    storyId: z.string().min(1),
+    editorialPass: z.boolean(),
+    safetyDecision: z.enum(["ALLOW", "BLOCK", "QUARANTINE", "UNKNOWN"]),
+    copyrightDecision: z.enum(["ALLOW", "QUARANTINE", "BLOCK"]),
+    gateOneV2SafetyGateHandoff: GateOneV2SafetyGateHandoffSchema,
+    gateOneV2PublishReadiness: GateOneV2PublishReadinessSchema,
+    gateOneV2PublishEnforcement: GateOneV2PublishEnforcementSchema,
+    publishable: z.boolean(),
+    blockers: z.array(z.string().min(1)),
+    scan: z
+      .object({
+        pass: z.literal("SCAN2_RENDERED"),
+        hardBlock: z.boolean(),
+        decisionHash: z.string().min(1),
+        reasons: z.array(z.string()),
+        rationale: z.string()
+      })
+      .strict(),
+    copyrightScan: z
+      .object({
+        lane: z.enum(["breaking", "standard", "deep"]),
+        decision: z.enum(["ALLOW", "QUARANTINE", "BLOCK"]),
+        sourceCount: z.number().int().nonnegative(),
+        missingSourceTextCount: z.number().int().nonnegative(),
+        candidateSignatureCount: z.number().int().nonnegative(),
+        maxOverlapSignatureCount: z.number().int().nonnegative(),
+        maxSourceSignatureCount: z.number().int().nonnegative(),
+        maxOverlapRatio: z.number().min(0),
+        rationale: z.array(z.string())
+      })
+      .strict()
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const enforcement = value.gateOneV2PublishEnforcement;
+    if (!enforcement.enforcementActive) {
+      return;
+    }
+    if (value.publishable !== enforcement.finalPublishable) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["publishable"],
+        message: "active Gate One V2 enforcement requires top-level publishable to match finalPublishable"
+      });
+    }
+    const missingBlockers = enforcement.blockers.filter((blocker) => !value.blockers.includes(blocker));
+    if (missingBlockers.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["blockers"],
+        message: `active Gate One V2 enforcement requires top-level blockers to include: ${missingBlockers.join(", ")}`
+      });
+    }
+  });
+
+export type PublishComputeRequest = z.infer<typeof PublishComputeRequestSchema>;
+export type GateOneV2SafetyGateHandoff = z.infer<typeof GateOneV2SafetyGateHandoffSchema>;
+export type GateOneV2PublishReadiness = z.infer<typeof GateOneV2PublishReadinessSchema>;
+export type GateOneV2PublishEnforcement = z.infer<typeof GateOneV2PublishEnforcementSchema>;
+export type PublishComputeResponse = z.infer<typeof PublishComputeResponseSchema>;
+
+export const GateOneV2PreflightRunRequestSchema = z
+  .object({
+    packet: z.unknown(),
+    promoteToCurrent: z.boolean().optional()
+  })
+  .strict();
+
+export const GateOneV2PreflightRunPersistedResultSchema = z
+  .object({
+    id: z.string().min(1).max(160),
+    storyId: z.string().min(1).max(160),
+    packetHash: Sha256DigestSchema,
+    contractId: GateOnePreflightContractSchema,
+    contractVersion: z.string().min(1).max(80),
+    policyVersion: z.string().min(1).max(80),
+    verdict: GateOnePreflightVerdictSchema,
+    checks: z.array(GateOnePreflightCheckResultSchema).min(1),
+    requiredSpecialists: z.array(GateOneSpecialistRequirementSchema).default([]),
+    requiredDisclosures: z.array(GateOneDisclosureRequirementSchema).default([]),
+    deterministicInputHash: Sha256DigestSchema,
+    startedAt: z.string().datetime(),
+    completedAt: z.string().datetime(),
+    implementationVersion: z.string().min(1).max(120),
+    externalDependencySnapshot: z.record(z.unknown()),
+    persistence: z
+      .object({
+        packetId: z.string().min(1).max(160),
+        runId: z.string().min(1).max(160)
+      })
+      .strict()
+  })
+  .strict()
+  .superRefine((result, ctx) => {
+    const hasFailingCheck = result.checks.some((check) => check.status === "FAIL");
+    if ((result.verdict === "PASS" || result.verdict === "PASS_WITH_REQUIREMENTS") && hasFailingCheck) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["verdict"],
+        message: `${result.verdict} preflight cannot include failing checks`
+      });
+    }
+    if (
+      result.verdict === "PASS_WITH_REQUIREMENTS" &&
+      result.requiredDisclosures.length === 0 &&
+      result.requiredSpecialists.length === 0
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["verdict"],
+        message: "PASS_WITH_REQUIREMENTS must include a disclosure or specialist requirement"
+      });
+    }
+  });
+
+export const GateOneV2PreflightRunResponseSchema = z
+  .object({
+    storyId: z.string().min(1).max(160),
+    packetHash: Sha256DigestSchema,
+    packetId: z.string().min(1).max(160),
+    promotedToCurrent: z.boolean(),
+    promotionBlockedReason: z.enum(["AUDIT_ONLY_DECISIONS_PRESENT"]).optional(),
+    satisfiedForConsensus: z.boolean(),
+    missingContractIds: z.array(GateOnePreflightContractSchema),
+    failedContractIds: z.array(GateOnePreflightContractSchema),
+    requiredSpecialists: z.array(GateOneSpecialistRequirementSchema),
+    requiredDisclosures: z.array(GateOneDisclosureRequirementSchema),
+    results: z.array(GateOneV2PreflightRunPersistedResultSchema).min(1).max(GATE_ONE_PREFLIGHT_CONTRACTS.length)
+  })
+  .strict()
+  .superRefine((response, ctx) => {
+    const seen = new Set(response.results.map((result) => result.contractId));
+    const declaredMissing = new Set(response.missingContractIds);
+    const declaredFailed = new Set(response.failedContractIds);
+    const missingFromResults = GATE_ONE_PREFLIGHT_CONTRACTS.filter((contractId) => !seen.has(contractId));
+    const failedFromResults = response.results
+      .filter((result) => result.verdict === "FAIL")
+      .map((result) => result.contractId);
+    for (const contractId of GATE_ONE_PREFLIGHT_CONTRACTS) {
+      if (!seen.has(contractId) && !declaredMissing.has(contractId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["missingContractIds"],
+          message: `Missing preflight result for ${contractId} must be declared in missingContractIds`
+        });
+      }
+      if (seen.has(contractId) && declaredMissing.has(contractId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["missingContractIds"],
+          message: `Preflight result for ${contractId} cannot also be declared missing`
+        });
+      }
+      if (failedFromResults.includes(contractId) && !declaredFailed.has(contractId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["failedContractIds"],
+          message: `Failed preflight result for ${contractId} must be declared in failedContractIds`
+        });
+      }
+      if (!failedFromResults.includes(contractId) && declaredFailed.has(contractId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["failedContractIds"],
+          message: `failedContractIds cannot include ${contractId} without a failed result`
+        });
+      }
+    }
+    if (seen.size !== response.results.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["results"],
+        message: "Preflight response must include one result per contract"
+      });
+    }
+    if (response.satisfiedForConsensus && (missingFromResults.length > 0 || failedFromResults.length > 0 || response.failedContractIds.length > 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["satisfiedForConsensus"],
+        message: "Satisfied preflight responses cannot have missing or failed required contracts"
+      });
+    }
+    response.results.forEach((result, index) => {
+      if (result.storyId !== response.storyId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["results", index, "storyId"],
+          message: "Preflight result storyId must match the response storyId"
+        });
+      }
+      if (result.packetHash !== response.packetHash) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["results", index, "packetHash"],
+          message: "Preflight result packetHash must match the response packetHash"
+        });
+      }
+      if (result.persistence.packetId !== response.packetId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["results", index, "persistence", "packetId"],
+          message: "Preflight result persistence packetId must match the response packetId"
+        });
+      }
+    });
+  });
+
+export type GateOneV2PreflightRunRequest = z.infer<typeof GateOneV2PreflightRunRequestSchema>;
+export type GateOneV2PreflightRunPersistedResult = z.infer<typeof GateOneV2PreflightRunPersistedResultSchema>;
+export type GateOneV2PreflightRunResponse = z.infer<typeof GateOneV2PreflightRunResponseSchema>;
+
+const GateOneV2PublicTrustPreflightContractSchema = z.enum([
+  "PACKET_INTEGRITY_V1",
+  "PUBLICATION_QA_V1",
+  "RIGHTS_ROUTING_V1",
+  "LIFECYCLE_READINESS_V1"
+]);
+const GateOneV2PublicTrustUniversalLaneSchema = z.enum([
+  "WRITER",
+  "FACT_CHECK",
+  "RISK",
+  "SOURCE_DIVERSITY",
+  "FAIRNESS_REPLY",
+  "PROVENANCE_AUTH"
+]);
+const GateOneV2PublicTrustVerdictSchema = z.enum(["PASS", "PASS_WITH_DISCLOSURE", "REVISE", "QUARANTINE", "BLOCK", "UNAVAILABLE"]);
+const GateOneV2PublicTrustSpecialistTypeSchema = z.enum([
+  "LEGAL_RIGHTS",
+  "DOMAIN_EXPERT",
+  "VISUAL_FORENSICS",
+  "LOCAL_LANGUAGE_CONTEXT",
+  "DATA_METHODOLOGY"
+]);
+
+export const GateOneV2TrustReceiptSchema = z
+  .object({
+    schemaVersion: z.literal("1.0"),
+    advisoryOnly: z.literal(true),
+    redactionVersion: z.literal("gate-one-v2-public-trust-receipt-v1"),
+    storyId: z.string().min(1),
+    packetId: z.string().min(1),
+    packetHash: z.string().min(1),
+    generatedAt: z.string().min(1),
+    publicationEffect: z.literal("NONE"),
+    mode: z.literal("PUBLIC_ADVISORY"),
+    policy: z
+      .object({
+        version: z.string().min(1),
+        profile: z.string().min(1),
+        globalState: GateOneV2PolicyGlobalStateSchema,
+        canaryPercent: z.number().int().min(0).max(100)
+      })
+      .strict(),
+    packet: z
+      .object({
+        current: z.boolean(),
+        createdAt: z.string().min(1),
+        language: z.string().min(1),
+        canonicalLanguage: z.string().min(1),
+        articleType: z.string().min(1),
+        reportingOrigin: z.string().min(1)
+      })
+      .strict(),
+    preflights: z.array(
+      z
+        .object({
+          contractId: GateOneV2PublicTrustPreflightContractSchema,
+          status: z.enum(["NOT_RUN", "PASS", "PASS_WITH_REQUIREMENTS", "FAIL"]),
+          contractVersion: z.string().min(1).optional(),
+          checkCount: z.number().int().nonnegative(),
+          requiredSpecialistCount: z.number().int().nonnegative(),
+          requiredDisclosureCount: z.number().int().nonnegative(),
+          completedAt: z.string().min(1).optional(),
+          implementationVersion: z.string().min(1).optional()
+        })
+        .strict()
+    ),
+    universalLanes: z.array(
+      z
+        .object({
+          lane: GateOneV2PublicTrustUniversalLaneSchema,
+          policyState: GateOneV2PolicyGlobalStateSchema,
+          status: z.enum(["MISSING", "ATTESTED", "ADVISORY_RUN_ONLY"]),
+          attestationCount: z.number().int().nonnegative(),
+          latestSignedAt: z.string().min(1).optional(),
+          verdicts: z.record(z.number().int().nonnegative()),
+          advisoryRunVerdict: GateOneV2PublicTrustVerdictSchema.optional()
+        })
+        .strict()
+    ),
+    shadowLanes: z.array(
+      z
+        .object({
+          lane: z.literal("EDITORIAL_INTEGRITY"),
+          policyState: z.literal("SHADOW"),
+          status: z.enum(["NOT_RUN", "ADVISORY_RUN_ONLY"]),
+          advisoryRunVerdict: GateOneV2PublicTrustVerdictSchema.optional()
+        })
+        .strict()
+    ),
+    specialistRequirements: z
+      .object({
+        conditionalOnly: z.literal(true),
+        status: z.enum(["NONE", "REQUIRED_BY_PREFLIGHT_OR_ADVISORY"]),
+        requiredTypes: z.array(GateOneV2PublicTrustSpecialistTypeSchema),
+        requiredCount: z.number().int().nonnegative()
+      })
+      .strict(),
+    disclosures: z
+      .object({
+        publicDisclosureIds: z.array(z.string()),
+        publicDisclosureCount: z.number().int().nonnegative(),
+        renderReceiptStatus: z.literal("NOT_PUBLIC_IN_THIS_RECEIPT")
+      })
+      .strict(),
+    claims: z
+      .object({
+        publicClaimCount: z.number().int().nonnegative(),
+        items: z.array(
+          z
+            .object({
+              id: z.string().min(1),
+              text: z.string().min(1),
+              epistemicStatus: z.string().min(1),
+              confidenceLanguage: z.string().min(1),
+              evidenceCount: z.number().int().nonnegative(),
+              counterevidenceCount: z.number().int().nonnegative()
+            })
+            .strict()
+        )
+      })
+      .strict(),
+    provenance: z
+      .object({
+        publicSourceCount: z.number().int().nonnegative(),
+        publicEvidenceCount: z.number().int().nonnegative(),
+        graphEntityCount: z.number().int().nonnegative(),
+        graphActivityCount: z.number().int().nonnegative(),
+        graphAgentCount: z.number().int().nonnegative(),
+        graphAlternative: z
+          .object({
+            summary: z.string().min(1).max(500),
+            publicEvidenceLimit: z.number().int().positive().max(50),
+            publicEvidenceShown: z.number().int().nonnegative().max(50),
+            publicEvidenceTruncated: z.boolean(),
+            items: z.array(
+              z
+                .object({
+                  evidenceId: z.string().min(1).max(200),
+                  publicSourceLabel: z.string().min(1).max(80),
+                  sourceClass: z.string().min(1).max(80),
+                  directness: z.string().min(1).max(80),
+                  authenticityStatus: z.string().min(1).max(80),
+                  publicSummary: z.string().min(1).max(2000)
+                })
+                .strict()
+            )
+          })
+          .strict()
+      })
+      .strict(),
+    fairness: z
+      .object({
+        affectedStakeholderCount: z.number().int().nonnegative(),
+        rightOfReplyCount: z.number().int().nonnegative(),
+        materialCounterevidenceCount: z.number().int().nonnegative(),
+        alternativeExplanationCount: z.number().int().nonnegative(),
+        knownUnknownCount: z.number().int().nonnegative(),
+        fairnessExceptionCount: z.number().int().nonnegative()
+      })
+      .strict(),
+    consensus: z
+      .object({
+        terminalStatus: z.enum(["WOULD_ALLOW", "PENDING", "BLOCKED"]),
+        terminalStep: z.enum([
+          "PACKET_CURRENTNESS",
+          "POLICY_VERSION",
+          "PREFLIGHTS",
+          "SPECIALIST_REQUIREMENTS",
+          "REVIEW_ELIGIBILITY",
+          "DISCLOSURE_RECEIPTS",
+          "INDEPENDENCE",
+          "HARD_VERDICTS",
+          "ROLE_COUNTS",
+          "OWNER_DIVERSITY",
+          "TRUST_WEIGHTS",
+          "HOLDS",
+          "SAFETY_GATE",
+          "PUBLIC_BLOCKED",
+          "PUBLIC_PENDING",
+          "WOULD_ALLOW"
+        ]),
+        reasonCodes: z.array(z.string().min(1)),
+        selectedReviewCount: z.number().int().nonnegative(),
+        safetyDecision: z.enum(["ALLOW", "BLOCK", "QUARANTINE", "UNAVAILABLE"]).optional(),
+        activeLegalHold: z.boolean(),
+        receiptHash: z.string().regex(/^sha256:[a-f0-9]{64}$/)
+      })
+      .strict()
+      .optional(),
+    safety: z
+      .object({
+        status: z.enum(["RECORDED_IN_CONSENSUS", "UNAVAILABLE"]),
+        decision: z.enum(["ALLOW", "BLOCK", "QUARANTINE", "UNAVAILABLE"]).optional()
+      })
+      .strict(),
+    lifecycle: z
+      .object({
+        currentVersion: z.number().int().positive(),
+        challengeRoute: z.string().min(1),
+        correctionTaxonomyVersion: z.string().min(1),
+        expiryPolicy: z.string().min(1),
+        correctionHooksVisible: z.literal(true),
+        previousVersionsPath: z.string().min(1),
+        previousVersionsAvailable: z.boolean(),
+        translationDependencyCount: z.number().int().nonnegative(),
+        cacheInvalidationDependencyCount: z.number().int().nonnegative(),
+        staleReceipt: z.boolean()
+      })
+      .strict(),
+    receiptHash: z.string().regex(/^sha256:[a-f0-9]{64}$/)
+  })
+  .strict();
+
+export type GateOneV2TrustReceipt = z.infer<typeof GateOneV2TrustReceiptSchema>;
+
 export const MachineRoomResponseSchema = z.object({
   storyId: z.string().min(1),
   packet: z.object({
@@ -1328,7 +2582,16 @@ export const MachineRoomResponseSchema = z.object({
     schemaVersion: z.number().int().positive(),
     createdAt: z.string().min(1)
   }),
-  claims: z.array(z.object({ id: z.string().min(1), text: z.string().min(1), citations: z.array(z.string()) })),
+  translation: TranslationMetadataSchema.optional(),
+  article: StoryArticleDocumentSchema.optional(),
+  claims: z.array(
+    z.object({
+      id: z.string().min(1),
+      key: z.string().min(1).optional(),
+      text: z.string().min(1),
+      citations: z.array(z.string())
+    })
+  ),
   attestations: z.array(
     z.object({
       id: z.string().min(1),
@@ -1350,7 +2613,11 @@ export const MachineRoomResponseSchema = z.object({
       reason: z.string().min(1),
       signedAt: z.string().min(1)
     })
-  )
+  ),
+  gateOneV2ShadowAdvisoryReceipt: GateOneV2ShadowAdvisoryReceiptSchema.optional(),
+  gateOneV2ConsensusReceipt: GateOneV2ConsensusReceiptSchema.optional(),
+  gateOneV2TrustReceipt: GateOneV2TrustReceiptSchema.optional(),
+  gateOneV2ProofGraph: GateOnePublicProofGraphSchema.optional()
 });
 
 export type MachineRoomResponse = z.infer<typeof MachineRoomResponseSchema>;
@@ -1358,6 +2625,7 @@ export type MachineRoomResponse = z.infer<typeof MachineRoomResponseSchema>;
 export const AssistantOrientationActionStateSchema = z.enum([
   "available",
   "requires_agent_signed_write",
+  "requires_agent_capability_discovery",
   "requires_signed_in_human",
   "requires_l2_verified_human",
   "requires_l3_verified_human",
@@ -1373,6 +2641,7 @@ export const AssistantOrientationActionIdSchema = z.enum([
   "reward_vote",
   "create_candidate",
   "attest_or_object",
+  "gate_one_v2_lane_attestation",
   "submit_revision_proposal"
 ]);
 export const AssistantOrientationActionSchema = z
@@ -1390,10 +2659,26 @@ export const AssistantOrientationActionSchema = z
 
 export const AssistantOrientationEvidenceLinkSchema = z
   .object({
-    id: z.enum(["story", "machine_room", "debate", "sources", "versions", "consensus", "ledger"]),
+    id: z.enum(["story", "machine_room", "trust_receipt", "proof_graph", "debate", "sources", "versions", "consensus", "ledger"]),
     label: z.string().min(1),
     href: z.string().min(1),
     endpoint: z.string().min(1).optional()
+  })
+  .strict();
+
+const AssistantOrientationHumanRewardWindowSchema = z
+  .object({
+    status: z.enum(["open", "frozen", "closed"]),
+    active: z.boolean(),
+    note: z.string().min(1)
+  })
+  .strict();
+
+const AssistantOrientationAiRewardWindowSchema = z
+  .object({
+    status: z.enum(["open", "closed"]),
+    active: z.boolean(),
+    note: z.string().min(1)
   })
   .strict();
 
@@ -1415,13 +2700,9 @@ export const AssistantOrientationStorySchema = z
     verifiedAttestationCount: z.number().int().nonnegative(),
     verifiedObjectionCount: z.number().int().nonnegative(),
     criticalRiskObjectionCount: z.number().int().nonnegative(),
-    rewardWindow: z
-      .object({
-        status: z.enum(["open", "frozen", "closed"]),
-        active: z.boolean(),
-        note: z.string().min(1)
-      })
-      .strict(),
+    rewardWindow: AssistantOrientationHumanRewardWindowSchema,
+    humanRewardWindow: AssistantOrientationHumanRewardWindowSchema,
+    aiRewardWindow: AssistantOrientationAiRewardWindowSchema,
     actions: z.array(AssistantOrientationActionSchema),
     evidenceLinks: z.array(AssistantOrientationEvidenceLinkSchema),
     relayHints: z.array(z.string().min(1))
@@ -1496,7 +2777,14 @@ export type StoryAssistantOrientationResponse = z.infer<typeof StoryAssistantOri
 export const V2StoryDetailDataSchema = StoryDetailSchema.strict();
 export const V2StoryDetailResponseSchema = apiSuccessSchema(V2StoryDetailDataSchema);
 
-const V2MachineRoomContributionRoleSchema = z.enum(["WRITER", "FACT_CHECK", "RISK", "SOURCE_DIVERSITY"]);
+const V2MachineRoomContributionRoleSchema = z.enum([
+  "WRITER",
+  "FACT_CHECK",
+  "RISK",
+  "SOURCE_DIVERSITY",
+  "FAIRNESS_REPLY",
+  "PROVENANCE_AUTH"
+]);
 
 export const V2MachineRoomDataSchema = z
   .object({

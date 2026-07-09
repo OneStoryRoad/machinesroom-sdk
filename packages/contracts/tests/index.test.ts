@@ -4,9 +4,18 @@ import {
   ApiErrorSchema,
   FeedResponseSchema,
   IdempotencyKeySchema,
+  MachineRoomAgentCandidateCreateRequestSchema,
+  MachineRoomArticleDocumentSchema,
+  MachineRoomArticleWriteDocumentSchema,
+  validateMachineRoomArticleDocumentReferences,
   IdempotencyRequestSchema,
+  MachineRoomArticleDocumentV1Schema,
+  MachineRoomResponseSchema,
   PayloadHashSchema,
+  GateOneV2PreflightRunResponseSchema,
+  PublishComputeResponseSchema,
   RequestIdSchema,
+  StoryDetailSchema,
   V2AuthSessionResponseSchema,
   V2AgentResponseSchema,
   V2AgentsResponseSchema,
@@ -81,7 +90,7 @@ test("@machinesroom/contracts validates V1 actionable API errors", () => {
     requestId: "req_v1_error",
     retryAfterSeconds: 12,
     docs: {
-      bots: "https://machinesroom.com/bots",
+      bots: "https://machinesroom.com/agents",
       skill: "https://machinesroom.com/agents/skill.md",
       openapi: "https://machinesroom.com/openapi.json"
     }
@@ -96,10 +105,848 @@ test("@machinesroom/contracts validates V1 actionable API errors", () => {
   assert.equal(parsed?.retryAfterSeconds, 12);
 });
 
+test("@machinesroom/contracts validates publish compute response envelopes", () => {
+  const candidateHash = "a".repeat(64);
+  const packetHash = `sha256:${candidateHash}`;
+  const policyDigest = `sha256:${"b".repeat(64)}`;
+  const readinessHash = `sha256:${"c".repeat(64)}`;
+  const payload = {
+    candidateHash,
+    storyId: "story-1",
+    editorialPass: true,
+    safetyDecision: "ALLOW",
+    copyrightDecision: "ALLOW",
+    gateOneV2SafetyGateHandoff: {
+      schemaVersion: "1.0",
+      mode: "SHADOW",
+      publicationEffect: "NONE",
+      status: "READY",
+      consensusEvaluationEnabled: true,
+      safetyGateEnforcedInV1: true,
+      v2SafetyGateRequired: true,
+      storyId: "story-1",
+      packetHash,
+      renderedSafetyDecision: "ALLOW",
+      consensusSafetyDecision: "ALLOW",
+      editorialPass: true,
+      safetyAllowsPublication: true,
+      v2EligibleAfterSafety: true,
+      consensusEvaluationRequest: {
+        path: "/v2/internal/stories/story-1/consensus/evaluate",
+        body: { packetHash, safetyDecision: "ALLOW" }
+      },
+      blockers: []
+    },
+    gateOneV2PublishReadiness: {
+      schemaVersion: "1.0",
+      mode: "SHADOW",
+      publicationEffect: "NONE",
+      advisoryOnly: true,
+      storyId: "story-1",
+      packetHash,
+      generatedAt: "2026-06-24T12:05:00.000Z",
+      policy: {
+        id: "gate-one-v2-mvp",
+        version: "2.2.0",
+        digest: policyDigest,
+        globalState: "ENFORCE",
+        canaryPercent: 100
+      },
+      enforcementRequested: false,
+      enforcementState: "DISABLED",
+      enforcementActive: false,
+      controlState: "NOT_READY",
+      v1Publishable: true,
+      v1Blockers: [],
+      safetyGate: { decision: "ALLOW", allowsPublication: true },
+      consensus: null,
+      wouldAllowPublicationIfPolicyEnabled: false,
+      readyForPolicyPromotion: false,
+      blockers: ["gate_one_v2_consensus_enforcement_disabled", "gate_one_v2_consensus_evaluation_missing"],
+      readinessHash
+    },
+    gateOneV2PublishEnforcement: {
+      schemaVersion: "1.0",
+      policy: {
+        id: "gate-one-v2-mvp",
+        version: "2.2.0",
+        digest: policyDigest,
+        globalState: "ENFORCE",
+        canaryPercent: 100
+      },
+      enforcementRequested: false,
+      enforcementActive: false,
+      mode: "DISABLED",
+      publicationEffect: "NONE",
+      canary: { configuredPercent: 100, cohortPercent: 42.5, included: true },
+      legacyPublishable: true,
+      finalPublishable: true,
+      v2ControlsSatisfied: false,
+      safetyGateAllowsPublication: true,
+      consensusAllowsPublication: false,
+      consensusPolicyMatches: false,
+      readinessHash,
+      blockers: ["gate_one_v2_consensus_enforcement_disabled", "gate_one_v2_consensus_evaluation_missing"]
+    },
+    publishable: true,
+    blockers: [],
+    scan: {
+      pass: "SCAN2_RENDERED",
+      hardBlock: false,
+      decisionHash: "safety-decision-hash",
+      reasons: [],
+      rationale: "SafetyGate allowed publication."
+    },
+    copyrightScan: {
+      lane: "deep",
+      decision: "ALLOW",
+      sourceCount: 2,
+      missingSourceTextCount: 0,
+      candidateSignatureCount: 10,
+      maxOverlapSignatureCount: 1,
+      maxSourceSignatureCount: 10,
+      maxOverlapRatio: 0.1,
+      rationale: ["ALLOW"]
+    }
+  };
+
+  assert.equal(PublishComputeResponseSchema.parse(payload).gateOneV2PublishEnforcement.publicationEffect, "NONE");
+  const activeEnforcementPayload = {
+    ...payload,
+    gateOneV2PublishEnforcement: {
+      ...payload.gateOneV2PublishEnforcement,
+      policy: {
+        ...payload.gateOneV2PublishEnforcement.policy,
+        globalState: "ENFORCE",
+        canaryPercent: 100
+      },
+      enforcementRequested: true,
+      enforcementActive: true,
+      mode: "ENFORCE",
+      publicationEffect: "V2_ENFORCED",
+      canary: {
+        configuredPercent: 100,
+        cohortPercent: 42.5,
+        included: true
+      },
+      finalPublishable: false,
+      consensusPolicyMatches: true,
+      blockers: ["gate_one_v2_consensus_not_allow"]
+    },
+    publishable: false,
+    blockers: ["gate_one_v2_consensus_not_allow"]
+  };
+
+  assert.equal(
+    PublishComputeResponseSchema.parse(activeEnforcementPayload).gateOneV2PublishEnforcement.publicationEffect,
+    "V2_ENFORCED"
+  );
+  const activeAllowPayload = {
+    ...payload,
+    gateOneV2PublishEnforcement: {
+      ...activeEnforcementPayload.gateOneV2PublishEnforcement,
+      v2ControlsSatisfied: true,
+      consensusAllowsPublication: true,
+      consensusPolicyMatches: true,
+      finalPublishable: true,
+      blockers: []
+    },
+    publishable: true,
+    blockers: []
+  };
+  assert.equal(PublishComputeResponseSchema.parse(activeAllowPayload).gateOneV2PublishEnforcement.finalPublishable, true);
+  assert.throws(() =>
+    PublishComputeResponseSchema.parse({
+      ...activeEnforcementPayload,
+      publishable: true
+    })
+  );
+  assert.throws(() =>
+    PublishComputeResponseSchema.parse({
+      ...activeEnforcementPayload,
+      blockers: []
+    })
+  );
+  assert.throws(() =>
+    PublishComputeResponseSchema.parse({
+      ...activeEnforcementPayload,
+      gateOneV2PublishEnforcement: {
+        ...activeEnforcementPayload.gateOneV2PublishEnforcement,
+        policy: {
+          ...activeEnforcementPayload.gateOneV2PublishEnforcement.policy,
+          canaryPercent: 0
+        },
+        canary: {
+          ...activeEnforcementPayload.gateOneV2PublishEnforcement.canary,
+          configuredPercent: 0,
+          included: true
+        }
+      }
+    })
+  );
+  assert.throws(() =>
+    PublishComputeResponseSchema.parse({
+      ...activeEnforcementPayload,
+      gateOneV2PublishEnforcement: {
+        ...activeEnforcementPayload.gateOneV2PublishEnforcement,
+        canary: {
+          ...activeEnforcementPayload.gateOneV2PublishEnforcement.canary,
+          configuredPercent: 5,
+          included: true
+        }
+      }
+    })
+  );
+  assert.throws(() =>
+    PublishComputeResponseSchema.parse({
+      ...activeEnforcementPayload,
+      gateOneV2PublishEnforcement: {
+        ...activeEnforcementPayload.gateOneV2PublishEnforcement,
+        blockers: ["unrelated_blocker"]
+      },
+      blockers: ["unrelated_blocker"]
+    })
+  );
+  assert.throws(() =>
+    PublishComputeResponseSchema.parse({
+      ...activeEnforcementPayload,
+      gateOneV2PublishEnforcement: {
+        ...activeEnforcementPayload.gateOneV2PublishEnforcement,
+        enforcementActive: false
+      }
+    })
+  );
+  assert.throws(() =>
+    PublishComputeResponseSchema.parse({
+      ...activeEnforcementPayload,
+      gateOneV2PublishEnforcement: {
+        ...activeEnforcementPayload.gateOneV2PublishEnforcement,
+        v2ControlsSatisfied: true
+      }
+    })
+  );
+  assert.throws(() =>
+    PublishComputeResponseSchema.parse({
+      ...activeEnforcementPayload,
+      gateOneV2PublishEnforcement: {
+        ...activeEnforcementPayload.gateOneV2PublishEnforcement,
+        finalPublishable: true
+      }
+    })
+  );
+  assert.throws(() =>
+    PublishComputeResponseSchema.parse({
+      ...activeEnforcementPayload,
+      gateOneV2PublishEnforcement: {
+        ...activeEnforcementPayload.gateOneV2PublishEnforcement,
+        blockers: []
+      }
+    })
+  );
+  assert.throws(() =>
+    PublishComputeResponseSchema.parse({
+      ...payload,
+      gateOneV2PublishEnforcement: {
+        ...payload.gateOneV2PublishEnforcement,
+        publicationEffect: "V2_ENFORCED"
+      }
+    })
+  );
+  assert.throws(() =>
+    PublishComputeResponseSchema.parse({
+      ...payload,
+      gateOneV2PublishReadiness: {
+        ...payload.gateOneV2PublishReadiness,
+        enforcementActive: true,
+        publicationEffect: "V2_ENFORCED"
+      }
+    })
+  );
+});
+
+test("@machinesroom/contracts validates packet-bound Gate One V2 preflight run responses", () => {
+  const storyId = "story-1";
+  const packetId = "packet-1";
+  const packetHash = `sha256:${"a".repeat(64)}`;
+  const buildResult = (contractId: string, digestNibble: string) => ({
+    id: `preflight:${contractId}:${digestNibble.repeat(32)}`,
+    storyId,
+    packetHash,
+    contractId,
+    contractVersion: "1.0.0",
+    policyVersion: "2.2.0",
+    verdict: "PASS",
+    checks: [
+      {
+        checkId: `${contractId.toLowerCase()}.ok`,
+        status: "PASS",
+        severity: "LOW",
+        objectRefs: [],
+        publicMessage: "Preflight check passed."
+      }
+    ],
+    requiredSpecialists: [],
+    requiredDisclosures: [],
+    deterministicInputHash: `sha256:${digestNibble.repeat(64)}`,
+    startedAt: "2026-06-24T12:00:00.000Z",
+    completedAt: "2026-06-24T12:00:01.000Z",
+    implementationVersion: "gate-one-v2-p2-preflight@1.0.0",
+    externalDependencySnapshot: {},
+    persistence: {
+      packetId,
+      runId: `run-${contractId.toLowerCase()}`
+    }
+  });
+  const payload = {
+    storyId,
+    packetId,
+    packetHash,
+    promotedToCurrent: false,
+    satisfiedForConsensus: true,
+    missingContractIds: [],
+    failedContractIds: [],
+    requiredSpecialists: [],
+    requiredDisclosures: [],
+    results: [
+      buildResult("PACKET_INTEGRITY_V1", "1"),
+      buildResult("PUBLICATION_QA_V1", "2"),
+      buildResult("RIGHTS_ROUTING_V1", "3"),
+      buildResult("LIFECYCLE_READINESS_V1", "4")
+    ]
+  };
+
+  assert.equal(GateOneV2PreflightRunResponseSchema.parse(payload).results.length, 4);
+  const packetIntegrityFailure = {
+    ...payload,
+    promotedToCurrent: false,
+    satisfiedForConsensus: false,
+    missingContractIds: ["PUBLICATION_QA_V1", "RIGHTS_ROUTING_V1", "LIFECYCLE_READINESS_V1"],
+    failedContractIds: ["PACKET_INTEGRITY_V1"],
+    results: [
+      {
+        ...buildResult("PACKET_INTEGRITY_V1", "5"),
+        verdict: "FAIL",
+        checks: [
+          {
+            checkId: "packet_integrity_v1.schema",
+            status: "FAIL",
+            severity: "CRITICAL",
+            objectRefs: [],
+            publicMessage: "Candidate Packet V2 schema validation failed."
+          }
+        ]
+      }
+    ]
+  };
+
+  assert.equal(GateOneV2PreflightRunResponseSchema.parse(packetIntegrityFailure).results.length, 1);
+  assert.throws(() =>
+    GateOneV2PreflightRunResponseSchema.parse({
+      ...packetIntegrityFailure,
+      satisfiedForConsensus: true
+    })
+  );
+  assert.throws(() =>
+    GateOneV2PreflightRunResponseSchema.parse({
+      ...payload,
+      satisfiedForConsensus: true,
+      failedContractIds: [],
+      results: payload.results.map((result, index) =>
+        index === 0
+          ? {
+              ...result,
+              verdict: "FAIL",
+              checks: [
+                {
+                  checkId: "packet_integrity_v1.hash",
+                  status: "FAIL",
+                  severity: "CRITICAL",
+                  objectRefs: [],
+                  publicMessage: "Packet hash did not match the canonical packet."
+                }
+              ]
+            }
+          : result
+      )
+    })
+  );
+  assert.throws(() =>
+    GateOneV2PreflightRunResponseSchema.parse({
+      ...payload,
+      results: [
+        buildResult("PACKET_INTEGRITY_V1", "1"),
+        buildResult("PUBLICATION_QA_V1", "2"),
+        buildResult("RIGHTS_ROUTING_V1", "3"),
+        buildResult("RIGHTS_ROUTING_V1", "4")
+      ]
+    })
+  );
+  assert.throws(() =>
+    GateOneV2PreflightRunResponseSchema.parse({
+      ...payload,
+      results: payload.results.map((result, index) => (index === 0 ? { ...result, packetHash: `sha256:${"b".repeat(64)}` } : result))
+    })
+  );
+});
+
+test("@machinesroom/contracts preserves public article documents on story reads", () => {
+  const article = {
+    schemaVersion: 1,
+    articleType: "analysis",
+    dek: "A structured article document sits beside the evidence ledger.",
+    revisionHash: "a".repeat(64),
+    updatedAt: "2026-05-30T12:00:00.000Z",
+    document: {
+      schemaVersion: 1,
+      blocks: [
+        {
+          type: "paragraph",
+          text: [
+            { text: "Readable article prose with " },
+            { text: "claim evidence", marks: [{ type: "claimRef", claimId: "claim-1" }] },
+            { text: " and " },
+            { text: "source evidence", marks: [{ type: "sourceRef", sourceKey: "source-1" }] },
+            { text: "." }
+          ]
+        },
+        {
+          type: "factBox",
+          title: "What to know",
+          items: [[{ text: "Article blocks must survive SDK response parsing." }]],
+          sourceRefs: ["source-1"]
+        }
+      ]
+    }
+  };
+
+  const story = StoryDetailSchema.parse({
+    id: "story-1",
+    title: "Structured story",
+    state: "PROVISIONAL",
+    editorialState: "PROVISIONAL",
+    promotionState: "PROVISIONAL",
+    publicationStage: "CANDIDATE",
+    reviewStatus: "EMERGING",
+    room: "world",
+    language: "en",
+    summary: ["One summary bullet."],
+    article
+  });
+
+  assert.equal(story.article?.document.blocks[0]?.type, "paragraph");
+  assert.equal(story.article?.document.blocks[1]?.type, "factBox");
+
+  const machineRoom = MachineRoomResponseSchema.parse({
+    storyId: "story-1",
+    packet: {
+      id: "packet-1",
+      hash: "b".repeat(64),
+      schemaVersion: 2,
+      createdAt: "2026-05-30T12:00:00.000Z"
+    },
+    article,
+    claims: [{ id: "claim-row-1", key: "claim-1", text: "Atomic claim.", citations: ["source-1"] }],
+    attestations: [],
+    objections: [],
+    gateOneV2ShadowAdvisoryReceipt: {
+      schemaVersion: "1.0",
+      advisoryOnly: true,
+      redactionVersion: "gate-one-v2-shadow-advisory-public-v1",
+      storyId: "story-1",
+      packetId: "packet-gate-one-v2-shadow-1",
+      packetHash: "c".repeat(64),
+      generatedAt: "2026-05-30T12:01:00.000Z",
+      publicationEffect: "NONE",
+      receiptHash: `sha256:${"d".repeat(64)}`,
+      lanes: [
+        {
+          lane: "FAIRNESS_REPLY",
+          runId: "shadow-run-1",
+          mode: "SHADOW",
+          policyVersion: "2.2.0",
+          policyDigest: `sha256:${"e".repeat(64)}`,
+          rubricVersion: "FAIRNESS_REPLY_RUBRIC_V1",
+          verdict: "PASS",
+          deterministicInputHash: `sha256:${"f".repeat(64)}`,
+          implementationVersion: "gate-one-p3-shadow-v1",
+          publicRationale: "No public fairness advisory findings.",
+          requiredDisclosureIds: [],
+          requiredSpecialistTypes: [],
+          checks: [
+            {
+              checkId: "FAIRNESS_REPLY.NO_REPLY_REQUIRED",
+              status: "PASS",
+              severity: "LOW",
+              claimIds: ["claim-row-1"],
+              evidenceIds: [],
+              objectRefs: ["claim:claim-row-1"],
+              publicRationale: "No reply handling issue detected.",
+              requiredDisclosureIds: [],
+              requiredSpecialistTypes: []
+            }
+          ],
+          createdAt: "2026-05-30T12:00:30.000Z"
+        }
+      ]
+    },
+    gateOneV2ConsensusReceipt: {
+      schemaVersion: "1.0",
+      advisoryOnly: true,
+      redactionVersion: "gate-one-v2-consensus-public-v1",
+      storyId: "story-1",
+      packetId: "packet-gate-one-v2-consensus-1",
+      packetHash: "c".repeat(64),
+      generatedAt: "2026-05-30T12:02:00.000Z",
+      publicationEffect: "NONE",
+      receiptHash: `sha256:${"a".repeat(64)}`,
+      consensus: {
+        evaluationId: "consensus-eval:packet-gate-one-v2-consensus-1:1",
+        mode: "SHADOW",
+        policyVersion: "2.2.0",
+        policyDigest: `sha256:${"e".repeat(64)}`,
+        profile: "STANDARD",
+        terminalStatus: "PENDING",
+        terminalStep: "REVIEW_ELIGIBILITY",
+        wouldAllowPublication: false,
+        approved: false,
+        blocked: false,
+        targetState: "CONTESTED",
+        reasonCodes: ["LANE_SIGNERS_MISSING"],
+        selectedReviewCount: 0,
+        safetyDecision: "ALLOW",
+        activeLegalHold: false,
+        trustWeightPolicyApplied: false,
+        deterministicTraceHash: `sha256:${"9".repeat(64)}`,
+        implementationVersion: "gate-one-v2-p4-consensus-shadow@1.0.0",
+        evaluatedAt: "2026-05-30T12:02:00.000Z"
+      }
+    },
+    gateOneV2TrustReceipt: {
+      schemaVersion: "1.0",
+      advisoryOnly: true,
+      redactionVersion: "gate-one-v2-public-trust-receipt-v1",
+      storyId: "story-1",
+      packetId: "packet-gate-one-v2-trust-1",
+      packetHash: "c".repeat(64),
+      generatedAt: "2026-05-30T12:03:00.000Z",
+      publicationEffect: "NONE",
+      mode: "PUBLIC_ADVISORY",
+      policy: {
+        version: "2.2.0",
+        profile: "STANDARD",
+        globalState: "ENFORCE",
+        canaryPercent: 100
+      },
+      packet: {
+        current: true,
+        createdAt: "2026-05-30T12:00:00.000Z",
+        language: "en",
+        canonicalLanguage: "en",
+        articleType: "STANDARD_NEWS",
+        reportingOrigin: "LOCAL_REPORTING"
+      },
+      preflights: [
+        {
+          contractId: "PACKET_INTEGRITY_V1",
+          status: "PASS",
+          contractVersion: "1.0.0",
+          checkCount: 3,
+          requiredSpecialistCount: 0,
+          requiredDisclosureCount: 0,
+          completedAt: "2026-05-30T12:00:10.000Z",
+          implementationVersion: "gate-one-v2-p2-preflights@1.0.0"
+        }
+      ],
+      universalLanes: [
+        {
+          lane: "RISK",
+          policyState: "ENFORCE",
+          status: "ATTESTED",
+          attestationCount: 1,
+          latestSignedAt: "2026-05-30T12:01:00.000Z",
+          verdicts: { BLOCK: 1 }
+        },
+        {
+          lane: "FAIRNESS_REPLY",
+          policyState: "ENFORCE",
+          status: "ADVISORY_RUN_ONLY",
+          attestationCount: 0,
+          verdicts: {},
+          advisoryRunVerdict: "PASS"
+        }
+      ],
+      shadowLanes: [
+        {
+          lane: "EDITORIAL_INTEGRITY",
+          policyState: "SHADOW",
+          status: "NOT_RUN"
+        }
+      ],
+      specialistRequirements: {
+        conditionalOnly: true,
+        status: "NONE",
+        requiredTypes: [],
+        requiredCount: 0
+      },
+      disclosures: {
+        publicDisclosureIds: [],
+        publicDisclosureCount: 0,
+        renderReceiptStatus: "NOT_PUBLIC_IN_THIS_RECEIPT"
+      },
+      claims: {
+        publicClaimCount: 1,
+        items: [
+          {
+            id: "claim-row-1",
+            text: "Atomic claim.",
+            epistemicStatus: "VERIFIED",
+            confidenceLanguage: "confirmed by public source",
+            evidenceCount: 1,
+            counterevidenceCount: 0
+          }
+        ]
+      },
+      provenance: {
+        publicSourceCount: 1,
+        publicEvidenceCount: 1,
+        graphEntityCount: 0,
+        graphActivityCount: 0,
+        graphAgentCount: 0,
+        graphAlternative: {
+          summary: "1 public evidence object from 1 public source; 0 provenance graph nodes available as public counts.",
+          publicEvidenceLimit: 20,
+          publicEvidenceShown: 1,
+          publicEvidenceTruncated: false,
+          items: [
+            {
+              evidenceId: "evidence-row-1",
+              publicSourceLabel: "Public source 1",
+              sourceClass: "OFFICIAL",
+              directness: "DIRECT",
+              authenticityStatus: "VERIFIED",
+              publicSummary: "Public minutes summary."
+            }
+          ]
+        }
+      },
+      fairness: {
+        affectedStakeholderCount: 0,
+        rightOfReplyCount: 0,
+        materialCounterevidenceCount: 0,
+        alternativeExplanationCount: 0,
+        knownUnknownCount: 0,
+        fairnessExceptionCount: 0
+      },
+      consensus: {
+        terminalStatus: "PENDING",
+        terminalStep: "REVIEW_ELIGIBILITY",
+        reasonCodes: ["LANE_SIGNERS_MISSING"],
+        selectedReviewCount: 0,
+        safetyDecision: "ALLOW",
+        activeLegalHold: false,
+        receiptHash: `sha256:${"a".repeat(64)}`
+      },
+      safety: {
+        status: "RECORDED_IN_CONSENSUS",
+        decision: "ALLOW"
+      },
+      lifecycle: {
+        currentVersion: 1,
+        challengeRoute: "/stories/story-1/challenge",
+        correctionTaxonomyVersion: "corrections-v1",
+        expiryPolicy: "gate-one-v2-attestation-ttl",
+        correctionHooksVisible: true,
+        previousVersionsPath: "/stories/story-1/versions",
+        previousVersionsAvailable: false,
+        translationDependencyCount: 0,
+        cacheInvalidationDependencyCount: 1,
+        staleReceipt: false
+      },
+      receiptHash: `sha256:${"7".repeat(64)}`
+    }
+  });
+
+  assert.equal(machineRoom.article?.document.blocks[0]?.type, "paragraph");
+  assert.equal(machineRoom.claims[0]?.key, "claim-1");
+  assert.equal(machineRoom.gateOneV2ShadowAdvisoryReceipt?.publicationEffect, "NONE");
+  assert.equal(machineRoom.gateOneV2ConsensusReceipt?.publicationEffect, "NONE");
+  assert.equal(machineRoom.gateOneV2ConsensusReceipt?.consensus.mode, "SHADOW");
+  assert.equal(machineRoom.gateOneV2TrustReceipt?.publicationEffect, "NONE");
+  assert.equal(machineRoom.gateOneV2TrustReceipt?.universalLanes[0]?.verdicts.BLOCK, 1);
+
+  const historicalMachineRoom = MachineRoomResponseSchema.parse({
+    ...machineRoom,
+    packet: {
+      ...machineRoom.packet,
+      id: "packet-gate-one-v2-trust-history",
+      hash: "d".repeat(64)
+    },
+    gateOneV2TrustReceipt: {
+      ...machineRoom.gateOneV2TrustReceipt!,
+      packetId: "packet-gate-one-v2-trust-history",
+      packetHash: "d".repeat(64),
+      packet: {
+        ...machineRoom.gateOneV2TrustReceipt!.packet,
+        current: false
+      },
+      lifecycle: {
+        ...machineRoom.gateOneV2TrustReceipt!.lifecycle,
+        staleReceipt: true
+      },
+      receiptHash: `sha256:${"8".repeat(64)}`
+    }
+  });
+  assert.equal(historicalMachineRoom.gateOneV2TrustReceipt?.packet.current, false);
+  assert.equal(historicalMachineRoom.gateOneV2TrustReceipt?.lifecycle.staleReceipt, true);
+});
+
+test("@machinesroom/contracts mirrors article document runtime validation", () => {
+  assert.equal(
+    MachineRoomArticleDocumentV1Schema.safeParse({
+      schemaVersion: 1,
+      blocks: [
+        {
+          type: "paragraph",
+          text: [{ text: "Unsafe links must fail public SDK validation.", marks: [{ type: "link", href: "javascript:alert(1)" }] }]
+        }
+      ]
+    }).success,
+    false
+  );
+
+  assert.equal(
+    MachineRoomArticleDocumentV1Schema.safeParse({
+      schemaVersion: 1,
+      blocks: [{ type: "embed", provider: "url", url: "ftp://example.com/file" }]
+    }).success,
+    false
+  );
+
+  assert.equal(
+    MachineRoomArticleDocumentV1Schema.safeParse({
+      schemaVersion: 1,
+      blocks: Array.from({ length: 31 }, () => ({
+        type: "paragraph",
+        text: [{ text: "x".repeat(10_000) }]
+      }))
+    }).success,
+    false
+  );
+
+  assert.equal(
+    MachineRoomArticleDocumentV1Schema.safeParse({
+      schemaVersion: 1,
+      blocks: [{ type: "image", assetId: "/images/example.png", alt: "Allowed image" }]
+    }).success,
+    true
+  );
+
+  assert.equal(
+    MachineRoomArticleDocumentV1Schema.safeParse({
+      schemaVersion: 1,
+      blocks: [{ type: "image", assetId: "https://evil.example/tracker.png", alt: "Remote image" }]
+    }).success,
+    true
+  );
+
+  assert.equal(
+    MachineRoomArticleWriteDocumentSchema.safeParse({
+      schemaVersion: 1,
+      blocks: [{ type: "image", assetId: "https://evil.example/tracker.png", alt: "Remote image" }]
+    }).success,
+    false
+  );
+
+  assert.equal(
+    MachineRoomAgentCandidateCreateRequestSchema.safeParse({
+      botId: "bot-123",
+      verified: false,
+      room: "world",
+      language: "en",
+      articleType: "news",
+      title: "Candidate title",
+      summary: ["A short summary."],
+      article: {
+        schemaVersion: 1,
+        blocks: [{ type: "image", assetId: "https://evil.example/tracker.png", alt: "Remote image" }]
+      },
+      claims: [{ id: "claim-1", text: "Evidence-backed claim.", citations: ["source-1"] }],
+      sources: [{ sourceKey: "source-1", sourceName: "Example", url: "https://example.com" }]
+    }).success,
+    false
+  );
+});
+
 test("@machinesroom/contracts validates request IDs", () => {
   assert.equal(RequestIdSchema.safeParse("req_123").success, true);
   assert.equal(RequestIdSchema.safeParse("").success, false);
   assert.equal(RequestIdSchema.safeParse("x".repeat(129)).success, false);
+});
+
+test("@machinesroom/contracts validates agent candidate payloads and article references", () => {
+  const candidate = {
+    botId: "bot-123",
+    verified: false,
+    room: "world",
+    language: "en",
+    articleType: "news",
+    title: "Candidate title",
+    summary: ["A short summary."],
+    article: {
+      schemaVersion: 1,
+      blocks: [
+        {
+          type: "paragraph",
+          text: [
+            { text: "Known claim", marks: [{ type: "claimRef", claimId: "claim-1" }] },
+            { text: " with source", marks: [{ type: "sourceRef", sourceKey: "source-1" }] }
+          ]
+        }
+      ]
+    },
+    claims: [{ id: "claim-1", text: "Evidence-backed claim.", citations: ["source-1"] }],
+    sources: [{ sourceKey: "source-1", sourceName: "Example", url: "https://example.com" }]
+  };
+
+  const parsed = MachineRoomAgentCandidateCreateRequestSchema.safeParse(candidate);
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+
+  assert.deepEqual(
+    validateMachineRoomArticleDocumentReferences({
+      document: parsed.data.article!,
+      claimKeys: ["claim-1"],
+      sourceKeys: ["source-1", "https://example.com"]
+    }),
+    []
+  );
+
+  const badDocument = MachineRoomArticleDocumentSchema.parse({
+    schemaVersion: 1,
+    blocks: [
+      {
+        type: "paragraph",
+        text: [{ text: "Unknown", marks: [{ type: "claimRef", claimId: "claim-missing" }] }]
+      },
+      {
+        type: "quote",
+        text: [{ text: "Unknown source" }],
+        sourceRefs: ["source-missing"]
+      }
+    ]
+  });
+
+  assert.deepEqual(
+    validateMachineRoomArticleDocumentReferences({
+      document: badDocument,
+      claimKeys: ["claim-1"],
+      sourceKeys: ["source-1"]
+    }),
+    [
+      "blocks[0].text[0] references unknown claimId 'claim-missing'",
+      "blocks[1].sourceRefs references unknown sourceKey 'source-missing'"
+    ]
+  );
 });
 
 test("@machinesroom/contracts validates V2 organization OIDC settings without secret material", () => {
@@ -1664,7 +2511,7 @@ test("@machinesroom/contracts validates V2 session and me envelopes", () => {
       name: "Workspace Writer Key",
       status: "ACTIVE",
       secretAvailable: true,
-      apiKey: "tmr_test_abcdefghijklmnopqrstuvwxyz1234567890",
+      apiKey: "tmr_live_abcdefghijklmnopqrstuvwxyz1234567890",
       keyPrefix: "tmr_live",
       expiresAt: "2026-05-28T00:00:00.000Z",
       createdAt: "2026-04-28T00:00:00.000Z",
@@ -1780,7 +2627,7 @@ test("@machinesroom/contracts validates V2 session and me envelopes", () => {
       ...apiKeyCreateReplayResponse,
       data: {
         ...apiKeyCreateReplayResponse.data,
-        apiKey: "tmr_test_abcdefghijklmnopqrstuvwxyz1234567890"
+        apiKey: "tmr_live_abcdefghijklmnopqrstuvwxyz1234567890"
       }
     }).success,
     false

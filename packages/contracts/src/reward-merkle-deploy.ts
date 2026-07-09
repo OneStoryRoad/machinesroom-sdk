@@ -41,7 +41,9 @@ export interface RewardMerkleDeployPlan {
   contractName: typeof REWARD_MERKLE_DISTRIBUTOR_CONTRACT_NAME;
   mode: RewardMerkleDeployMode;
   chainId: number;
+  /** Raw RPC URL for internal transport construction only; this is intentionally omitted from JSON output. */
   rpcUrl: string;
+  rpcUrlRedacted: string;
   tokenAddress: string;
   adminAddress: string;
   constructorArgs: readonly [string, string];
@@ -78,6 +80,11 @@ function normalizeUrl(raw: string | undefined, label: string): string {
   } catch {
     throw new Error(`${label} must be an http(s) URL`);
   }
+}
+
+function redactUrl(raw: string): string {
+  const url = new URL(raw);
+  return `${url.protocol}//[redacted]`;
 }
 
 function normalizeAddress(raw: string | undefined, label: string): string {
@@ -125,11 +132,12 @@ export function buildRewardMerkleDistributorDeployPlan(input: {
     }
   }
 
-  return {
+  const plan: RewardMerkleDeployPlan = {
     contractName: REWARD_MERKLE_DISTRIBUTOR_CONTRACT_NAME,
     mode,
     chainId,
     rpcUrl,
+    rpcUrlRedacted: redactUrl(rpcUrl),
     tokenAddress,
     adminAddress,
     constructorArgs: [tokenAddress, adminAddress],
@@ -137,4 +145,11 @@ export function buildRewardMerkleDistributorDeployPlan(input: {
     readyToSend: mode === "send",
     safetyNotes
   };
+
+  Object.defineProperty(plan, "rpcUrl", {
+    value: rpcUrl,
+    enumerable: false
+  });
+
+  return plan;
 }
