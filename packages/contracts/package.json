@@ -9,7 +9,7 @@
   "homepage": "https://machinesroom.com/openapi.json",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OneStoryRoad/MachinesRoom.git",
+    "url": "git+https://github.com/OneStoryRoad/machinesroom-sdk.git",
     "directory": "packages/contracts"
   },
   "bugs": {

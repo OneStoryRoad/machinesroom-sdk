@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "OneStoryRoad/MachinesRoom",
-  "sourceSha": "21dae6982556f3a603c56e8f9c0ed2ba0a701064",
+  "sourceSha": "275bc74a8b5ebea697d3b1df24f446bb8bddd1e8",
   "checksums": {
     ".github/workflows/npm-publish.yml": "sha256:d69fcc06b1300d52e89ccd0829278ebac9a6738761f96ea2264d327b4a5a0df8",
     ".gitignore": "sha256:9d808a98861a5c18cb686649d96c8e1910d8881f97b59d84d8f11fb62e8dfdbb",
     "LICENSE": "sha256:a82e30067a9eb1de16a9cba7db7fb0137470564e97a46e4b44e5521eed420356",
     "package.json": "sha256:a1c06f1fa27b18089630988b1c6806ffa2f203a56782b5d9276c476ebf6f4c5c",
     "packages/api-client/LICENSE": "sha256:a82e30067a9eb1de16a9cba7db7fb0137470564e97a46e4b44e5521eed420356",
-    "packages/api-client/package.json": "sha256:55a1e80ef61681839d22cdbb5acce3ff0f07940193f466363f9ef442e98f9cd2",
+    "packages/api-client/package.json": "sha256:399837f7e22cb2c79d76ab39f9a89117b559503bce4eba70b74fe3e5665238fa",
     "packages/api-client/README.md": "sha256:491f6462855dbdfac24a33858e9515932575a74f134cda73be891278a3d4b9e3",
     "packages/api-client/src/agent.ts": "sha256:fc53e58036cc256a0dfb9ce99bdc7d422aed85e570080a81e308f672fd83334a",
     "packages/api-client/src/generated/gate-one-policy.generated.ts": "sha256:58317ffcf01aa66bfece4586ef7b483ea8379c5d63fba5519edc47ee95c36cb7",
@@ -20,7 +20,7 @@
     "packages/contracts/artifacts/RewardMerkleDistributor.json": "sha256:211c8755e729238538d6d951ed8e6ae542f5a75c93250bba4cd9fcfff7110e1d",
     "packages/contracts/contracts/RewardMerkleDistributor.sol": "sha256:e8e51cc9009d90f4f458adacdd7bc27fc737f9e0ca7d1688d64dfe7b76a46a33",
     "packages/contracts/LICENSE": "sha256:a82e30067a9eb1de16a9cba7db7fb0137470564e97a46e4b44e5521eed420356",
-    "packages/contracts/package.json": "sha256:487f9f684116e82e68fafb23bb2e42621d3df2f6f652454fb67a7fef20df8b5e",
+    "packages/contracts/package.json": "sha256:1696ca1f644bfe2889d088732730b64f12fd05f67ad8ea4bb55e44d9e5ea1204",
     "packages/contracts/README.md": "sha256:e760148e747a6c926614d6df8cb0568faf200a9ba31fdf2e07fdc0fab4fc78f5",
     "packages/contracts/scripts/compile-reward-merkle-distributor.mjs": "sha256:0265ea4f94fb61b0321bee9026eeb567f51ffa37e38f25c7b41c01fae2005b1c",
     "packages/contracts/scripts/deploy-reward-merkle-distributor.ts": "sha256:1b710f0aa5f0d0cda83b6d9cc0bc6b01b523641c85b1d8e832d7ab01ef64f2e0",
@@ -55,8 +55,8 @@
     "packages/contracts/tsconfig.json": "sha256:76393be48f351d9502e56a2b5d0c248f1e385311fe5bce87651e4542606d3e84",
     "pnpm-lock.yaml": "sha256:8b579ad64f7d3dcc4806b41e60fa565ffe8cbea9445d84221e91fbe1e7b7f6dd",
     "pnpm-workspace.yaml": "sha256:2791d8ecc433b764905a26c8dcd97164c5a76475d9efcf3bbcaeb0dde1ac65df",
-    "README.md": "sha256:cdc3cf943f908617a112df2e63d4554875479c23fc63f04bd083dfee3c78c17f",
-    "scripts/check-sdk-package-boundary.mjs": "sha256:ae27b634f81ff0c2b46ee4409921c4f15d979d033a688d470fb97a789a36c926",
+    "README.md": "sha256:f91875dbb69a960b458594af0263f433e4310c1e0ad9e3345f8ea05f3dd41f13",
+    "scripts/check-sdk-package-boundary.mjs": "sha256:f30597a6eb194e954b723d3075dd474a19754acc4f820ee0c9469cc481787ec1",
     "scripts/ops/publish-sdk-packages.sh": "sha256:22c9007544b43ca898d784d5acd13a287431a3aadbe3382d50ac2f205c97a226",
     "tsconfig.base.json": "sha256:05ae17667a389870187e190e4ed192fd5fc40be53ce9fb369c334ff12a8f4b80"
   }

@@ -106,8 +106,8 @@ for (const sdkPackage of packages) {
   if (manifest.publishConfig?.registry !== "https://registry.npmjs.org/") {
     errors.push(`${label} publishConfig.registry must be https://registry.npmjs.org/`);
   }
-  if (manifest.repository?.url !== "git+https://github.com/OneStoryRoad/MachinesRoom.git") {
-    errors.push(`${label} repository.url must point at OneStoryRoad/MachinesRoom`);
+  if (manifest.repository?.url !== "git+https://github.com/OneStoryRoad/machinesroom-sdk.git") {
+    errors.push(`${label} repository.url must point at OneStoryRoad/machinesroom-sdk`);
   }
   if (manifest.repository?.directory !== sdkPackage.directory) {
     errors.push(`${label} repository.directory must be ${sdkPackage.directory}`);
